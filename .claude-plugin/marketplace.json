@@ -1,0 +1,17 @@
+{
+  "name": "genvid-skills",
+  "owner": {
+    "name": "Genvid"
+  },
+  "metadata": {
+    "description": "Genvid reference skill pack (Claude Code installer; the pack is runtime-agnostic and works without this file)."
+  },
+  "plugins": [
+    {
+      "name": "genvid-skills",
+      "source": "./",
+      "description": "Genvid reference skill pack — teaches any MCP-capable agent to drive the Genvid governed boundary.",
+      "version": "0.1.0"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "genvid-skills",
+  "version": "0.1.0",
+  "description": "Genvid reference skill pack — teaches any MCP-capable agent to drive the Genvid governed boundary.",
+  "boundary_compat": ">=0.1.0 <0.2.0",
+  "skills": [
+    "genvid-orientation",
+    "genvid-agent-generation",
+    "genvid-generator-connections",
+    "genvid-generate-with-provenance",
+    "genvid-boundary-gate",
+    "genvid-propagate-change",
+    "genvid-screenplay-breakdown",
+    "genvid-scene-shot-design",
+    "genvid-storyboard"
+  ]
+}
