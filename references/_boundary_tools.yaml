@@ -1,0 +1,101 @@
+# Curated boundary-tools contract.
+# Source of truth for boundary-tools.md — do not edit generated output by hand.
+# status: live   = exists on main today; smoke test validates names + params.
+# status: designed = net-new; smoke test treats as pending (not failing).
+#
+# classification is an informational risk signal:
+#   read_only  = free, runs immediately.
+#   additive   = adds new state; no spend, no overwrite.
+#   billable   = spends; your MCP client prompts to allow it and the backend enforces the project budget (HTTP 402 pre-spend if it would exceed).
+#   destructive = overwrites/removes existing state; your MCP client prompts to allow it and the backend enforces permission.
+# Every billable/destructive call is audit-logged in entity_events. There is no bespoke server-side approval step and no approval id.
+
+- name: discovery_read
+  classification: read_only
+  status: live
+  params: [method, source_type, source_id]
+  skill: genvid-propagate-change
+
+- name: propagate_change
+  classification: billable
+  status: live
+  params: [source_type, source_id, option]
+  skill: genvid-propagate-change
+
+- name: media_read
+  classification: read_only
+  status: live
+  params: [project_id, media_id]
+  skill: genvid-agent-generation
+
+- name: ingest_generated_media
+  classification: additive
+  status: live
+  params: [project_id, link_type, shot_id, asset_id, source_url, image_base64, model_provider, model_name, render_type, prompt, params, input_media_ids, input_link_type]
+  skill: genvid-agent-generation
+
+- name: production_read
+  classification: read_only
+  status: live
+  params: [method, project_id, resource_type, resource_id, assigned_to]
+  skill: genvid-agent-generation
+
+- name: production_write
+  classification: additive
+  status: live
+  params: [method, project_id, resource_type, resource_id, task_type, assigned_to_email, workflow_status, priority]
+  skill: genvid-agent-generation
+
+- name: screenplay_read
+  classification: read_only
+  status: live
+  params: [method, project_id]
+  skill: genvid-screenplay-breakdown
+
+- name: screenplay_write
+  classification: destructive
+  status: live
+  params: [method, project_id, content]
+  skill: genvid-screenplay-breakdown
+
+- name: breakdown_assets
+  classification: billable
+  status: live
+  params: [project_id]
+  skill: genvid-screenplay-breakdown
+
+- name: scenes_read
+  classification: read_only
+  status: live
+  params: [method, project_id, scene_id]
+  skill: genvid-scene-shot-design
+
+- name: scenes_write
+  classification: destructive
+  status: live
+  params: [method, project_id, scene_id]
+  skill: genvid-scene-shot-design
+
+- name: shots_read
+  classification: read_only
+  status: live
+  params: [method, project_id, shot_id]
+  skill: genvid-scene-shot-design
+
+- name: shots_write
+  classification: destructive
+  status: live
+  params: [method, project_id, shot_id]
+  skill: genvid-scene-shot-design
+
+- name: breakdown_storyboard
+  classification: billable
+  status: live
+  params: [project_id]
+  skill: genvid-storyboard
+
+# generate_first_frames is intentionally NOT listed: it is platform/UI-side only
+# (in-graph agent + REST UI) and withheld from the remote MCP transport, so external
+# agents cannot call it. They compose first frames bring-your-own-model
+# (media_read -> own provider -> ingest_generated_media). See ADR-019, #1723.
+
