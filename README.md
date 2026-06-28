@@ -11,7 +11,7 @@ The pack carries no tenant data. Each skill describes how to call the Genvid bou
 **Claude Code:**
 
 ```
-/plugin marketplace add genvid-holdings/genvid-skills
+/plugin marketplace add genvid-holdings/agent-skills
 /plugin install genvid-skills@genvid-skills
 ```
 
@@ -20,8 +20,8 @@ The pack carries no tenant data. Each skill describes how to call the Genvid bou
 Clone the repo and place the `skills/` folder where your agent loads skills:
 
 ```sh
-git clone https://github.com/genvid-holdings/genvid-skills.git
-# then point your agent at genvid-skills/skills/
+git clone https://github.com/genvid-holdings/agent-skills.git
+# then point your agent at agent-skills/skills/
 ```
 
 Note: `.claude-plugin/` is a Claude Code convenience shim and is ignored by other runtimes. The pack itself is not Claude-only — all skill content lives in `skills/` and is runtime-agnostic.
@@ -55,3 +55,14 @@ The `version` field in `pack.json` is matched to a boundary release via `boundar
 ```
 
 When the boundary ships a breaking change the minor version increments, `boundary_compat` narrows, and the pack version bumps. Pin to a pack version in your deployment if you need stability across boundary upgrades.
+
+## Local validation aid
+
+[`skills-ref`](https://github.com/agentskills/agentskills) (from the `agentskills/agentskills` GitHub repo) is an optional local tool that validates `SKILL.md` files against the Agent Skills schema. It is useful during development but is **not required** and is **not used in CI**. CI uses the bundled `scripts/validate_pack.py` instead.
+
+```sh
+# clone the Agent Skills reference repo, then from its skills-ref/ dir:
+pip install -e .
+# validate a skill directory:
+skills-ref validate genvid-skills/skills/<skill-name>
+```
