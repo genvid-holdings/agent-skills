@@ -55,14 +55,3 @@ The `version` field in `pack.json` is matched to a boundary release via `boundar
 ```
 
 When the boundary ships a breaking change the minor version increments, `boundary_compat` narrows, and the pack version bumps. Pin to a pack version in your deployment if you need stability across boundary upgrades.
-
-## Local validation aid
-
-[`skills-ref`](https://github.com/agentskills/agentskills) (from the `agentskills/agentskills` GitHub repo) is an optional local tool that validates `SKILL.md` files against the Agent Skills schema. It is useful during development but is **not required** and is **not used in CI**. CI uses the bundled `scripts/validate_pack.py` instead.
-
-```sh
-# clone the Agent Skills reference repo, then from its skills-ref/ dir:
-pip install -e .
-# validate a skill directory:
-skills-ref validate genvid-skills/skills/<skill-name>
-```
