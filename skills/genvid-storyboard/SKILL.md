@@ -1,12 +1,12 @@
 ---
 name: genvid-storyboard
-description: Break a screenplay into a storyboard (billable) and compose each shot's first frame bring-your-own-model, signed with attested provenance.
+description: Compose each shot's first frame bring-your-own-model and bind it to the shot, signed with attested provenance.
 compatibility: Requires a Genvid governed boundary; see pack.json boundary_compat.
 ---
 
-# Storyboard Generation
+# Storyboard First Frames
 
-The storyboard workflow produces a visual breakdown of a project's screenplay into individual shots — `breakdown_storyboard`, a `billable` platform call that routes through the provenance boundary under budget enforcement — then **you** compose a first-frame keyframe for each shot with your own model and bind it. The breakdown is platform-generated; the first frames are bring-your-own-model: you run the generation with your own provider and key, and Genvid signs the binding with attested provenance (see Step 2).
+Once the storyboard's shots exist, each shot gets a first-frame keyframe. On this path the first frames are **bring-your-own-model**: you run the generation with your own provider and key, and Genvid signs the binding with attested provenance. There is no platform "generate all keyframes" tool here — composing first frames is the bring-your-own-model flow, exactly like asset images.
 
 For OMC terminology used throughout this skill, see `references/omc-vocabulary.md`. Always use preferred terms — the avoid list is in that reference.
 
@@ -14,29 +14,15 @@ For OMC terminology used throughout this skill, see `references/omc-vocabulary.m
 
 ## Prerequisites
 
-Before breaking down the storyboard:
+**Shots and the storyboard must already exist.** First-frame composition operates on the shots already structured in the project's storyboard. If the storyboard has not been composed — scenes decomposed into beats and shots, each shot given its director intent (shot size, camera angle, camera movement, shot framing) — do that first with `storyboard_write(method="compose")`. See `genvid-scene-shot-design`.
 
-1. **Shots must be designed first.** `breakdown_storyboard` operates on the shots already in the project. If shots have not been structured and given director intent — shot size, camera angle, camera movement, and shot framing — do that work first. See `genvid-scene-shot-design`.
-
-2. **A generator connection must be registered for the breakdown's render type.** `breakdown_storyboard` routes through the boundary's generation layer, which selects the enabled connection registered for its `render_type` automatically — there is no select step. Make sure a matching connection exists and is enabled; registration is done through the Genvid REST API or console, not an MCP call. See `genvid-generator-connections`. (First-frame composition in Step 2 uses *your own* provider, so it needs no Genvid connection.)
+First-frame composition uses *your own* provider and key, so it needs no Genvid generator connection. (Generator connections govern the paths where Genvid runs the generation on your behalf; see `genvid-generator-connections`.)
 
 ---
 
-## Step 1 — Break down the storyboard
+## Compose each shot's first frame (bring-your-own-model)
 
-Use `breakdown_storyboard` to generate the visual breakdown of the project's screenplay into shot-level storyboard entries. This populates the storyboard with scene assignments, location context, and shot composition metadata derived from the screenplay and existing shot design.
-
-| Parameter | What to supply |
-|---|---|
-| `project_id` | The project whose screenplay to break into a storyboard |
-
-`breakdown_storyboard` is `billable`. Call it normally; your MCP client prompts you to allow it and the backend enforces the project budget (see `genvid-boundary-gate`).
-
----
-
-## Step 2 — Compose each shot's first frame (bring-your-own-model)
-
-Compose first frames with **your own** provider and bind them — Genvid governs and signs the result. There is no platform "generate all keyframes" tool on this path: composing first frames is the bring-your-own-model flow, exactly like asset images. You run the generation with your key; Genvid certifies the binding and the provenance.
+Compose first frames with **your own** provider and bind them — Genvid governs and signs the result. You run the generation with your key; Genvid certifies the binding and the provenance. There is no platform generation call and nothing billed by Genvid on this path.
 
 For each shot that needs a first frame:
 
@@ -46,13 +32,7 @@ For each shot that needs a first frame:
 4. **Compose the first frame I2I** with your own provider.
 5. **Bind it** — `ingest_generated_media(project_id=..., link_type="shot_firstframe", shot_id=..., render_type="I2I", model_provider=..., model_name=..., prompt=..., params=..., source_url=<provider result>, input_media_ids=[<image media ids>], input_link_type="firstframe_source_image")`.
 
-The full step-by-step is in `genvid-agent-generation` → **"Worked example — compose a shot's first frame"**. The bound first frame is signed (`externally_attested`) and carries the certified-inputs roll-up `input_certification` (`all_certified` if every cast/location image you used was certified). The bind itself is additive and not gated by an allow-prompt; the keyframe-task claim in step 1 is required for workflow accuracy whether or not your role could skip the gate.
-
----
-
-## Billable call protocol (the breakdown)
-
-`breakdown_storyboard` is `billable` (see `genvid-boundary-gate`): call it normally. Your MCP client shows its allow-prompt before the call runs, and the backend enforces the acting user's permission and the project budget — a run that would exceed the budget is refused pre-spend with HTTP 402. There is no separate step and no approval id. Tell the human what the call will do and that it will spend, so the client allow-prompt is informed. If the backend returns an error (402 over-budget, permission denied), surface it; the call did not run.
+The full step-by-step is in `genvid-agent-generation` → **"Worked example — compose a shot's first frame"**. The bound first frame is signed (`externally_attested`) and carries the certified-inputs roll-up `input_certification` (`all_certified` if every cast/location image you used was certified). The bind is additive and not gated by an allow-prompt; the keyframe-task claim in step 1 is required for workflow accuracy whether or not your role could skip the gate.
 
 First-frame composition is **not** billed by Genvid — you spend on your own provider; Genvid only signs the bound result.
 
@@ -62,9 +42,9 @@ First-frame composition is **not** billed by Genvid — you spend on your own pr
 
 | What you want to do | Skill |
 |---|---|
+| Design the shots before composing their first frames | `genvid-scene-shot-design` |
 | Understand how provenance is captured and what gets signed | `genvid-generate-with-provenance` |
 | Understand how billable/destructive calls are controlled | `genvid-boundary-gate` |
-| Design shots before running the storyboard breakdown | `genvid-scene-shot-design` |
 | Understand registered connections and routing | `genvid-generator-connections` |
 | Full tool list and classifications | `references/boundary-tools.md` |
 | OMC terminology reference | `references/omc-vocabulary.md` |

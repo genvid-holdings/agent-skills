@@ -58,11 +58,16 @@
   params: [method, project_id, content]
   skill: genvid-screenplay-breakdown
 
+# breakdown_assets / breakdown_storyboard remain on the boundary (deletion is #1171).
+# The v1 composition skills (genvid-screenplay-breakdown, genvid-scene-shot-design,
+# genvid-storyboard) no longer drive them — composition inference moved to the BYOK
+# agent (#1667). They are mapped here to the non-composition skills that still
+# reference them so the contract table has no dangling owner.
 - name: breakdown_assets
   classification: billable
   status: live
   params: [project_id]
-  skill: genvid-screenplay-breakdown
+  skill: genvid-orientation
 
 - name: scenes_read
   classification: read_only
@@ -70,10 +75,12 @@
   params: [method, project_id, scene_id]
   skill: genvid-scene-shot-design
 
+# scenes_write.linked_assets items carry an optional content anchor
+# (provenance:{quote, scene}); raw block_ids are rejected. See genvid-screenplay-breakdown.
 - name: scenes_write
   classification: destructive
   status: live
-  params: [method, project_id, scene_id]
+  params: [method, project_id, scene_id, linked_assets]
   skill: genvid-scene-shot-design
 
 - name: shots_read
@@ -88,11 +95,21 @@
   params: [method, project_id, shot_id]
   skill: genvid-scene-shot-design
 
+# storyboard_write is agent-authored composition (#1821, #1667). Per-method risk:
+# compose = destructive (full create/replace, pre-cert); insert = additive
+# (change-order, post-cert). Every shot carries a content anchor (provenance.quote)
+# the boundary resolves to block ids fail-fast.
+- name: storyboard_write
+  classification: destructive
+  status: live
+  params: [method, project_id, scenes, scene_id, beat, shots]
+  skill: genvid-scene-shot-design
+
 - name: breakdown_storyboard
   classification: billable
   status: live
   params: [project_id]
-  skill: genvid-storyboard
+  skill: genvid-generator-connections
 
 # generate_first_frames is intentionally NOT listed: it is platform/UI-side only
 # (in-graph agent + REST UI) and withheld from the remote MCP transport, so external
