@@ -50,11 +50,13 @@ The `version` field in `pack.json` is matched to a boundary release via `boundar
 
 ```json
 {
-  "boundary_compat": ">=0.1.0 <0.2.0"
+  "boundary_compat": ">=0.2.0 <0.3.0"
 }
 ```
 
 When the boundary ships a breaking change the minor version increments, `boundary_compat` narrows, and the pack version bumps. Pin to a pack version in your deployment if you need stability across boundary upgrades.
+
+**Caveat (as of #1966):** the range above is narrowed to match the pack's own `0.2.0` version per this policy, but that match is not yet CI-verified against a live boundary. `get_boundary_contract()` and a `boundary_client` module don't exist on the boundary side yet, so Gate 2 in `scripts/smoke_test.py` still SKIPS instead of checking the real contract version (see the comment near that check). Treat the narrowed range as a documentation-correctness fix, not a verified compatibility claim, until that gate goes live.
 
 ## Local validation aid
 

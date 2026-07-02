@@ -159,7 +159,7 @@ The boundary resolves each quote against the real screenplay and **fails fast** 
 
 ## Step 4 — Read the coverage lints and revise
 
-The boundary computes a **deterministic** subset of the coverage-and-continuity grammar over the full storyboard and returns it as advisory `lints` — never generated content, and it never acts on them for you. The `storyboard_write(method="insert")` response carries the recomputed `lints` array; read it and revise. (These are the enforced floor; the directorial grammar in Step 2 is yours to apply beyond it.)
+The boundary computes a **deterministic** subset of the coverage-and-continuity grammar over the full storyboard and returns it as advisory `lints` — never generated content, and it never acts on them for you. The `storyboard_write(method="insert")` response carries the recomputed `lints` array; read it and revise. You can also call `get_storyboard(project_id=...)` any time — not just right after a write — to fetch the current storyboard plus the same recomputed `lints`, e.g. to check coverage after a `compose` or to re-check state later in a session. (These are the enforced floor; the directorial grammar in Step 2 is yours to apply beyond it.)
 
 | Lint code | Scope | What it means | How to revise |
 |---|---|---|---|
@@ -192,7 +192,7 @@ For the full set of preferred terms and the complete avoid → use mapping, see 
 
 `storyboard_write(method="compose")` is `destructive` — it overwrites the storyboard. `storyboard_write(method="insert")` is additive — it adds coverage without overwriting. For a controlled call you call the tool normally; your MCP client shows its allow-prompt before the call runs, and the backend enforces the acting user's permission. There is no separate step and no approval id. If the backend returns a permission error, surface it; the write did not happen. Every action is recorded in the `entity_events` audit log.
 
-Read-only calls (`screenplay_read`, `scenes_read`, `shots_read`) run freely.
+Read-only calls (`screenplay_read`, `scenes_read`, `shots_read`, `get_storyboard`) run freely.
 
 ---
 

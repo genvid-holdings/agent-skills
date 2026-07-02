@@ -2,8 +2,8 @@
   "name": "genvid-skills",
   "version": "0.2.0",
   "description": "Genvid reference skill pack — teaches any MCP-capable agent to drive the Genvid governed boundary.",
-  "boundary_compat": ">=0.1.0 <0.2.0",
-  "migration_notes": "0.1.0 -> 0.2.0 (breaking): composition inference moved to the BYOK agent (#1667). The composition skills author structure themselves and cite verbatim screenplay quotes as content anchors instead of running the billable breakdown_* tools. storyboard_write compose payload is now Scene -> Beat -> Shot (a beats[] level was added between scene and shots), every shot carries provenance:{quote, scene?}, and scenes_write linked_assets items carry an optional provenance anchor; raw block_ids are rejected. breakdown_assets / breakdown_storyboard are no longer used by the pack's composition skills.",
+  "boundary_compat": ">=0.2.0 <0.3.0",
+  "migration_notes": "0.1.0 -> 0.2.0 (breaking): composition inference moved to the BYOK agent (#1667). The composition skills author structure themselves and cite verbatim screenplay quotes as content anchors instead of running the billable breakdown_* tools. storyboard_write compose payload is now Scene -> Beat -> Shot (a beats[] level was added between scene and shots), every shot carries provenance:{quote, scene?}, and scenes_write linked_assets items carry an optional provenance anchor; raw block_ids are rejected. breakdown_assets / breakdown_storyboard are no longer used by the pack's composition skills. boundary_compat narrowed from '>=0.1.0 <0.2.0' to '>=0.2.0 <0.3.0' (#1966) to match the pack version bump above, per the policy in README.md#compatibility; this is a documentation-correctness fix only — Gate 2 in scripts/smoke_test.py still SKIPS (no live boundary_client module exists yet), so the narrowed range is not yet CI-verified against a real boundary contract version.",
   "skills": [
     "genvid-orientation",
     "genvid-agent-generation",
