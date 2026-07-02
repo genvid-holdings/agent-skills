@@ -1,8 +1,9 @@
 {
   "name": "genvid-skills",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Genvid reference skill pack — teaches any MCP-capable agent to drive the Genvid governed boundary.",
   "boundary_compat": ">=0.1.0 <0.2.0",
+  "migration_notes": "0.1.0 -> 0.2.0 (breaking): composition inference moved to the BYOK agent (#1667). The composition skills author structure themselves and cite verbatim screenplay quotes as content anchors instead of running the billable breakdown_* tools. storyboard_write compose payload is now Scene -> Beat -> Shot (a beats[] level was added between scene and shots), every shot carries provenance:{quote, scene?}, and scenes_write linked_assets items carry an optional provenance anchor; raw block_ids are rejected. breakdown_assets / breakdown_storyboard are no longer used by the pack's composition skills.",
   "skills": [
     "genvid-orientation",
     "genvid-agent-generation",

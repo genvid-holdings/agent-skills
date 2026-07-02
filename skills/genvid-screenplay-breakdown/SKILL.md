@@ -1,82 +1,117 @@
 ---
 name: genvid-screenplay-breakdown
-description: Ingest and structure a screenplay, then run breakdown to populate scenes and elements.
+description: Read a screenplay, author the assets it implies with your own judgment, and cite each asset to its scene with a verbatim content anchor.
 compatibility: Requires a Genvid governed boundary; see pack.json boundary_compat.
 ---
 
 # Screenplay Breakdown
 
-The screenplay breakdown workflow takes a written screenplay and transforms it into the structured production data the rest of the pipeline depends on. It has two stages: reading and writing the screenplay text, then running breakdown to extract scenes and elements. Breakdown is Phase A of the production pipeline — nothing downstream (visual development, storyboard, generation) can proceed until the screenplay has been broken down and scenes are populated.
+Breakdown is Phase A of the production pipeline: it turns a written screenplay into the structured production data everything downstream (visual development, storyboard, generation) depends on. Nothing downstream can proceed until the screenplay's scenes are populated with assets.
+
+In this pack **you** do the breakdown. You read the screenplay, decide with your own judgment which cast members, locations, props, and costumes it contains, author an asset record for each, and then link each asset to the scenes it belongs to — citing a verbatim line of the screenplay as the reason. The boundary does not infer assets for you; it validates and records what you author, and it resolves your citations against the real screenplay text.
 
 For OMC terminology used throughout this skill, see `references/omc-vocabulary.md`.
 
 ---
 
-## Reading and writing the screenplay
+## Precondition — a screenplay must exist
 
-### Read the screenplay
+Breakdown reads an existing screenplay. Before you start, confirm the project has screenplay content: call `screenplay_read(method="get", project_id=...)` and check that `exists` is true. If there is no screenplay yet, write one with `screenplay_write(method="update", project_id=..., content=...)` — or have the human author it in the Genvid web app — before proceeding.
 
-Use `screenplay_read` to fetch or analyze a project's screenplay content.
+---
+
+## Step 1 — Read the screenplay verbatim
+
+Use `screenplay_read` to fetch the screenplay. It has three methods:
 
 ```
 screenplay_read(method=<method>, project_id=<project_id>)
 ```
 
-| Parameter | What to supply |
+| `method` | What it returns |
 |---|---|
-| `method` | The read operation to perform — `get` retrieves the raw screenplay text; `analyze` returns a structured analysis of the screenplay's narrative content |
-| `project_id` | The identifier of the project whose screenplay you are reading |
+| `get` | Overview — word count, page estimate, `exists`, and a short preview |
+| `analyze` | Structural parse — scene list with headings and word counts, and detected character names |
+| `full` | **Scene-segmented verbatim text** — `scenes:[{scene (1-based ordinal), heading, text}]`. This is the source of truth for content-anchor quotes. |
 
-`screenplay_read` is a `read_only`-classified tool. It runs immediately, free.
+`screenplay_read` is `read_only` — it runs immediately, free.
 
-### Write the screenplay
-
-Use `screenplay_write` to update a project's screenplay content.
-
-```
-screenplay_write(method=<method>, project_id=<project_id>, content=<content>)
-```
-
-| Parameter | What to supply |
-|---|---|
-| `method` | The write operation to perform — typically `update` to replace the screenplay text |
-| `project_id` | The identifier of the project whose screenplay you are updating |
-| `content` | The screenplay text to write |
-
-`screenplay_write` is a `destructive`-classified tool — it overwrites the stored screenplay. Call it normally; your MCP client prompts you to allow it and the backend enforces permission. See `genvid-boundary-gate`.
+**Always read with `method="full"` before you author.** The `full` response gives you the exact screenplay text, segmented by scene ordinal. You will copy spans of this text verbatim into the content anchors you attach in Step 3. Do not work from memory, from an earlier `analyze` overview, or from the human's paraphrase — copy from the `full` text you just read.
 
 ---
 
-## Running breakdown
+## Step 2 — Author the assets
 
-Once the screenplay is in place, run breakdown to extract scenes and production elements from it.
+Read each scene's `text` and decide, with your own judgment, which assets it introduces — cast members, locations, props, costumes, vehicles, and so on. This is the part that needs taste: the screenplay names some entities explicitly and implies others, and you decide what is worth tracking as a production asset.
+
+For each asset, create a record:
 
 ```
-breakdown_assets(project_id=<project_id>)
+assets_write(method="create", project_id=<project_id>, name=<name>, asset_type=<type>, description=<optional>)
 ```
 
 | Parameter | What to supply |
 |---|---|
-| `project_id` | The identifier of the project to break down |
+| `name` | The asset's name (for example a character's name, or a location) |
+| `asset_type` | One of: `cast_member`, `location`, `prop`, `costume`, `inspiration`, `extra`, `set_dressing`, `makeup_hair`, `vehicle`, `livestock`, `greenery` |
+| `description` | Optional — a short description of the asset |
 
-`breakdown_assets` is a `billable`-classified tool. It consumes pipeline resources and populates the project's scenes and elements from the screenplay. Call it normally; your MCP client prompts you to allow it and the backend enforces the project budget. See `genvid-boundary-gate`.
+`assets_write(method="create")` is **additive** — it adds new state without overwriting or spending, so it runs freely (see `genvid-boundary-gate`). Use `method="update"` with an `asset_id` to revise an asset you already created.
 
-What breakdown does:
+---
 
-- Parses the screenplay and creates a scene record for each scene
-- Extracts characters, props, and locations from each scene into structured elements
-- Links elements to the scenes they appear in
-- Produces the storyboard scaffold that the production phase builds on
+## Step 3 — Link each asset to its scenes with a content anchor
 
-A logline written in the screenplay is preserved and surfaced at the project level. Scenes that span a continuous unit of action in one location and time are each broken out as discrete scene records. A sequence is a coherent grouping of consecutive scenes — breakdown establishes the scene-level records that sequences are later organized across.
+An asset earns its place in a scene because the screenplay puts it there. Record that: for each scene, replace its asset links with the set of assets that belong to it, and cite the verbatim line that justifies each link.
+
+First resolve scene identifiers by listing — never infer a `scene_id` from the human's words or from positional language:
+
+```
+scenes_read(method="list", project_id=<project_id>)
+```
+
+Then update each scene:
+
+```
+scenes_write(
+  method="update",
+  project_id=<project_id>,
+  scene_id=<scene_id>,
+  linked_assets=[
+    {
+      "asset_id": <asset_id>,
+      "link_type": <role of the asset in the scene>,
+      "provenance": {
+        "quote": "<verbatim span copied from screenplay_read full>",
+        "scene": <1-based scene ordinal>
+      }
+    },
+    ...
+  ]
+)
+```
+
+- `linked_assets` is a **replacement** list — sending it replaces all of the scene's links, so include every asset that belongs to the scene in one call.
+- `provenance` is the **content anchor**. `quote` is verbatim screenplay text, at least 8 characters, copied exactly from the `full` read; `scene` is the 1-based scene ordinal the quote lives in. `occurrence` is only needed when the same quote legitimately repeats within the scene.
+- Raw `block_ids` are **not** accepted — you never handle opaque identifiers. You cite human-legible screenplay text and the boundary resolves it.
+
+`scenes_write(method="update")` is `destructive` — it overwrites the scene's existing state (see `genvid-boundary-gate`).
+
+---
+
+## The re-read-before-write rule
+
+The boundary resolves each `quote` against the real screenplay and **fails fast**: a paraphrase, an approximate quote, or a span that matches no scene text — or matches ambiguously — rejects the whole `scenes_write` update. Nothing is half-written.
+
+So before every write that carries a content anchor, re-read the screenplay with `screenplay_read(method="full")` and copy the quote **verbatim** from the returned text. If the screenplay may have changed since your last read, read it again. Quoting from memory is the most common way to get an update rejected.
 
 ---
 
 ## Control protocol for destructive and billable tools
 
-Both `screenplay_write` (destructive) and `breakdown_assets` (billable) are controlled (see `genvid-boundary-gate`): call the tool normally. Your MCP client shows its allow-prompt before the call runs, and the backend enforces the acting user's permission and — for `breakdown_assets` — the project budget, refusing pre-spend with HTTP 402 if a run would exceed it. There is no separate step and no approval id. If the backend returns an error (402 over-budget, permission denied), surface it; the call did not run. Both actions are recorded in the `entity_events` audit log.
+`screenplay_write` and `scenes_write` are `destructive`; `assets_write(method="create")` is additive and runs freely. For a controlled call you call the tool normally — your MCP client shows its allow-prompt before the call runs, and the backend enforces the acting user's permission. There is no separate approval step and no approval id. If the backend returns a permission error, surface it; the call did not run. Every destructive action is recorded in the `entity_events` audit log.
 
-Read-only calls (`screenplay_read`) run freely.
+Read-only calls (`screenplay_read`, `scenes_read`) run freely.
 
 ---
 
@@ -84,7 +119,8 @@ Read-only calls (`screenplay_read`) run freely.
 
 | What you want to do | Skill |
 |---|---|
-| Design shots within the scenes breakdown produced | `genvid-scene-shot-design` |
-| Understand how `screenplay_write` / `breakdown_assets` are controlled | `genvid-boundary-gate` |
+| Design the shots that cover each scene | `genvid-scene-shot-design` |
+| Understand how generated media is signed with attested provenance | `genvid-generate-with-provenance` |
+| Understand how `screenplay_write` / `scenes_write` are controlled | `genvid-boundary-gate` |
 | Full tool list and classifications | `references/boundary-tools.md` |
 | OMC terminology reference | `references/omc-vocabulary.md` |

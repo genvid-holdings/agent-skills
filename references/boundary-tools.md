@@ -15,9 +15,10 @@
 | `production_write` | additive | live | `method`, `project_id`, `resource_type`, `resource_id`, `task_type`, `assigned_to_email`, `workflow_status`, `priority` | genvid-agent-generation |
 | `screenplay_read` | read_only | live | `method`, `project_id` | genvid-screenplay-breakdown |
 | `screenplay_write` | destructive | live | `method`, `project_id`, `content` | genvid-screenplay-breakdown |
-| `breakdown_assets` | billable | live | `project_id` | genvid-screenplay-breakdown |
+| `breakdown_assets` | billable | live | `project_id` | genvid-orientation |
 | `scenes_read` | read_only | live | `method`, `project_id`, `scene_id` | genvid-scene-shot-design |
-| `scenes_write` | destructive | live | `method`, `project_id`, `scene_id` | genvid-scene-shot-design |
+| `scenes_write` | destructive | live | `method`, `project_id`, `scene_id`, `linked_assets` | genvid-scene-shot-design |
 | `shots_read` | read_only | live | `method`, `project_id`, `shot_id` | genvid-scene-shot-design |
 | `shots_write` | destructive | live | `method`, `project_id`, `shot_id` | genvid-scene-shot-design |
-| `breakdown_storyboard` | billable | live | `project_id` | genvid-storyboard |
+| `storyboard_write` | destructive | live | `method`, `project_id`, `scenes`, `scene_id`, `beat`, `shots` | genvid-scene-shot-design |
+| `breakdown_storyboard` | billable | live | `project_id` | genvid-generator-connections |
