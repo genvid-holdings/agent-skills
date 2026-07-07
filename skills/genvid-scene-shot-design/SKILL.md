@@ -64,11 +64,11 @@ Deciding the beats and how to cover each one is the taste this skill exists for.
 
 ## Step 3 — Write the storyboard
 
-There are two write paths. Use **`compose`** for the full storyboard before certification, and **`insert`** for a change-order after certification.
+There are two write paths. Use **`compose`** for the full storyboard before certification — it stages a pending review rather than writing live — and **`insert`** for a change-order after certification, applied live.
 
 ### Compose — the full storyboard (pre-certification)
 
-`storyboard_write(method="compose", ...)` is a full create/replace: you supply the complete `Scene → Beat → Shot` structure and it replaces the storyboard. It is `destructive` (see `genvid-boundary-gate`).
+`storyboard_write(method="compose", ...)` authors the complete `Scene → Beat → Shot` structure. On a project that already has a storyboard, it stages the result for review: the composed storyboard lands as a pending diff (response `status: "pending_review"` with a `diff_summary`) and is not live until it is Accepted — promote it with the storyboard approve action, `POST /projects/{id}/storyboard/actions/approve`. On an empty project, the first compose lands directly (response `status: "applied"`). It is `destructive` (it replaces any pending storyboard; see `genvid-boundary-gate`).
 
 ```
 storyboard_write(
@@ -118,6 +118,7 @@ storyboard_write(
 - Mise-en-scène and shot-direction fields take canonical enum values (see the vocabulary section below).
 - `provenance` is **required on every shot**. In `compose` you may omit `provenance.scene` and it defaults to the enclosing `scene_index`; set it only when the quote lives in a different scene.
 - Compose is **atomic**: a single paraphrased, unresolvable, or ambiguous quote rejects the entire compose. Nothing is half-written.
+- Compose stages a review, it is not live on save (except the first storyboard on an empty project). Read the response status: `pending_review` means a human (or you, via the approve action) must Accept the diff before it reaches production; `applied` means it landed directly (empty project, or the composition matched production exactly — nothing to review). Do not assume a compose is live — re-read with `get_storyboard` if you need to confirm production state.
 
 ### Insert — a change-order (post-certification)
 
@@ -190,7 +191,7 @@ For the full set of preferred terms and the complete avoid → use mapping, see 
 
 ## Destructive and additive call protocol
 
-`storyboard_write(method="compose")` is `destructive` — it overwrites the storyboard. `storyboard_write(method="insert")` is additive — it adds coverage without overwriting. For a controlled call you call the tool normally; your MCP client shows its allow-prompt before the call runs, and the backend enforces the acting user's permission. There is no separate step and no approval id. If the backend returns a permission error, surface it; the write did not happen. Every action is recorded in the `entity_events` audit log.
+`storyboard_write(method="compose")` is `destructive` — it replaces the storyboard, staged as a pending review for Accept (live immediately only for a first storyboard on an empty project). `storyboard_write(method="insert")` is additive — it adds coverage without overwriting. For a controlled call you call the tool normally; your MCP client shows its allow-prompt before the call runs, and the backend enforces the acting user's permission. There is no separate step and no approval id. If the backend returns a permission error, surface it; the write did not happen. Every action is recorded in the `entity_events` audit log.
 
 Read-only calls (`screenplay_read`, `scenes_read`, `shots_read`, `get_storyboard`) run freely.
 

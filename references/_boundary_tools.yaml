@@ -34,6 +34,19 @@
   params: [project_id, link_type, shot_id, asset_id, source_url, image_base64, model_provider, model_name, render_type, prompt, params, input_media_ids, input_link_type]
   skill: genvid-agent-generation
 
+# register_media is the sibling of ingest_generated_media (#2022): same backend
+# path, split by attestation semantics. ingest claims "I just generated this"
+# (generation record, verified tier, billable flow); register claims only "this
+# file exists in my storage" (hash/fingerprint/metadata, no generation record,
+# registered tier). additive with mandatory HITL binding review. The customer's
+# agent computes hash/fingerprint/metadata + proxy locally and Genvid never sees
+# the original bytes — the registered residency class (offline-media epic #1757).
+- name: register_media
+  classification: additive
+  status: live
+  params: [project_id, link_type, shot_id, asset_id, content_hash, fingerprint_iscc, fingerprint_iscc_content, filename, mime_type, size_bytes, duration_seconds, timecode, locator, locator_type, proxy_base64, proxy_filename, pre_signed_c2pa_manifest, input_media_ids]
+  skill: genvid-media-registration
+
 - name: production_read
   classification: read_only
   status: live
@@ -58,17 +71,10 @@
   params: [method, project_id, content]
   skill: genvid-screenplay-breakdown
 
-# breakdown_assets / breakdown_storyboard remain on the boundary (deletion is #1171).
-# The v1 composition skills (genvid-screenplay-breakdown, genvid-scene-shot-design,
-# genvid-storyboard) no longer drive them — composition inference moved to the BYOK
-# agent (#1667). They are mapped here to the non-composition skills that still
-# reference them so the contract table has no dangling owner.
-- name: breakdown_assets
-  classification: billable
-  status: live
-  params: [project_id]
-  skill: genvid-orientation
-
+# breakdown_assets / breakdown_storyboard / sync_assets_with_screenplay were retired
+# with the in-house composition backend (#1171, contract 0.3.0). Composition inference
+# now runs in the customer's BYOK agent via the governed write tools (scenes_write /
+# assets_write / shots_write / storyboard_write).
 - name: scenes_read
   classification: read_only
   status: live
@@ -104,12 +110,6 @@
   status: live
   params: [method, project_id, scenes, scene_id, beat, shots]
   skill: genvid-scene-shot-design
-
-- name: breakdown_storyboard
-  classification: billable
-  status: live
-  params: [project_id]
-  skill: genvid-generator-connections
 
 # generate_first_frames is intentionally NOT listed: it is platform/UI-side only
 # (in-graph agent + REST UI) and withheld from the remote MCP transport, so external
