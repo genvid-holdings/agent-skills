@@ -14,7 +14,7 @@ Read this before invoking any other skill. It establishes the contract every age
 
 Genvid exposes its production capabilities as a governed boundary over MCP (and REST). Any MCP-capable agent can drive it. Tools are discovered via MCP; the live surface is method-based — for example, `screenplay_read(method=…)` for reads and `screenplay_write(method=…)` for mutations. The naming pattern holds across the boundary: `*_read` tools are free, and `*_write` tools mutate. Classification on a `*_write` tool is per method: a method that only adds new state (the `create_*` methods, e.g. `production_write(method=create_project)`) is additive, while a method that overwrites or removes existing state (the `update_*` methods) is `destructive`.
 
-A call's classification — `billable` (spends) or `destructive` (overwrites/removes) — is an informational risk signal, not identifiable by name alone: a `*_write` tool's overwriting methods are `destructive` while its `create_*` methods are additive, and billable tools such as `breakdown_assets` have their own names. Check each tool's classification in `references/boundary-tools.md`.
+A call's classification — `billable` (spends) or `destructive` (overwrites/removes) — is an informational risk signal, not identifiable by name alone: a `*_write` tool's overwriting methods are `destructive` while its `create_*` methods are additive, and billable tools such as `propagate_change` have their own names. Check each tool's classification in `references/boundary-tools.md`.
 
 For the full tool list, classifications, and parameter shapes, see `references/boundary-tools.md`.
 
@@ -36,6 +36,18 @@ Follow these without exception on every call:
 
 ---
 
+## Where media lives — three residency classes
+
+Media in Genvid carries a residency class that says *where its bytes live*, separate from *what the media is*. Which class a media belongs to determines what Genvid holds and how strongly it can attest.
+
+- **Managed** — Genvid holds the bytes, as it always has. Everything works as today; media you generate through the boundary and bind with `ingest_generated_media` is managed.
+- **Connected (bring-your-own-storage)** — the bytes live in the customer's own storage, and Genvid reads them **transiently** when an operation genuinely needs them (signing at certification, a probe, a model input), retaining only derived artifacts: a proxy, a hash, a fingerprint, a manifest.
+- **Registered (offline)** — Genvid **never reads the bytes**. The registry entry holds a customer-computed SHA-256 (at a labeled trust tier), an ISCC fingerprint, technical metadata, a proxy, the OMC bindings, and any embedded C2PA manifest (chained by reference). This is the tier the `genvid-media-registration` skill drives: the customer's own agent indexes a directory, computes identity and a proxy locally, and registers each approved file with `register_media` — the original never moves.
+
+**The registered tier is honestly labeled, and that label is load-bearing.** A registered media's hash is a **customer claim**, signed at the `registered` attestation tier — *the claim is signed, the bytes are never verified*, because Genvid never held them. That is a genuinely weaker attestation than the `verified` tier (`externally_attested` / `genvid_witnessed`), and it is surfaced as such on the media and on any certification of it. **Certification is the one moment Genvid must touch bytes to sign at full strength** — capture and registration are not. If a studio wants verified-tier certification for a registered asset, that asset is flipped to connected (or its bytes are handed over once, transiently) at approval time. Never let a `registered` claim be read or presented as if it were `verified`; keeping the two tiers distinct is the whole trust model, not a formality.
+
+---
+
 ## Read posture: what the boundary does and does not protect
 
 Reads are free. A studio running its own agent against the boundary accepts that a compromised or careless skill can read everything the JWT is scoped to — data exfiltration within scope is a studio-side risk. The boundary's guarantees are on writes, billing, and provenance integrity — not on read confidentiality. Design your skills accordingly: do not assume that restricting write access is sufficient to protect sensitive project data.
@@ -48,6 +60,7 @@ Reads are free. A studio running its own agent against the boundary accepts that
 |---|---|
 | Run a controlled (billable or destructive) call | `genvid-boundary-gate` |
 | Generate locally with your own provider and bind the result (primary) | `genvid-agent-generation` |
+| Register files that already live in your own storage, without uploading them | `genvid-media-registration` |
 | Have Genvid run the generation, with signed provenance | `genvid-generate-with-provenance` |
 | Full tool list and parameter reference | `references/boundary-tools.md` |
 | OMC vocabulary quick reference | `references/omc-vocabulary.md` |

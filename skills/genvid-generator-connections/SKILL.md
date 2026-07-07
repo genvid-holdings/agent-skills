@@ -6,9 +6,11 @@ compatibility: Requires a Genvid governed boundary; see pack.json boundary_compa
 
 # Generator Connections
 
-A generator connection is a durable, tenant-scoped configuration record that tells the boundary which external provider and model to route a generation through. It is the routing config — provider, model, endpoint, and transport — for the path where **Genvid runs the generation** on your behalf (e.g. the billable `breakdown_storyboard`).
+A generator connection is a durable, tenant-scoped configuration record that tells the boundary which external provider and model to route a generation through. It is the routing config — provider, model, endpoint, and transport — for the path where **Genvid runs the generation** on your behalf: platform-run *media* generation (for example, generating a shot's keyframes), billed to your organization. Today that boundary-run generation is triggered platform-side only — the remote MCP surface exposes no generation-invoke tool — but connections still determine which provider and model those platform runs use.
 
-You do not need a connection for the primary, agent-side path. If your own agent generates the media locally and hands Genvid the result, no connection is involved — see `genvid-agent-generation`. Reach for connections only when you want the boundary itself to run the provider.
+Composition is **not** a Genvid-run path. Screenplay breakdown and storyboard authoring are done by your own agent, which composes the structure and cites verbatim screenplay quotes through the governed write tools (`scenes_write`, `assets_write`, `shots_write`, `storyboard_write`) — Genvid funds no composition inference. Connections govern only the media-generation path where you ask the boundary itself to run a provider.
+
+You do not need a connection for the primary, agent-side path either. If your own agent generates the media locally and hands Genvid the result, no connection is involved — see `genvid-agent-generation`. Reach for connections only when you want the boundary itself to run the provider.
 
 ---
 
