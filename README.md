@@ -11,8 +11,8 @@ The pack carries no tenant data. Each skill describes how to call the Genvid bou
 **Claude Code:**
 
 ```
-/plugin marketplace add genvid-holdings/agent-skills
-/plugin install genvid-skills@genvid-skills
+claude plugin marketplace add genvid-holdings/agent-skills
+claude plugin install genvid-skills@genvid-skills
 ```
 
 **Other runtimes** (Codex, Gemini CLI, Cursor, OpenHands, and any other agent that loads skills from a directory):
@@ -28,17 +28,20 @@ Note: `.claude-plugin/` is a Claude Code convenience shim and is ignored by othe
 
 ## Connecting your agent to a Genvid boundary
 
-Installing the pack teaches your agent *how* to drive the boundary; connecting points it at a live Genvid MCP server. Connection uses a standard OAuth browser login — your agent signs in the same way you sign in to the Genvid web app. There is no API key or JWT to paste.
+Installing the pack teaches your agent *how* to drive the boundary; connecting is a separate, explicit step that points it at the live Genvid MCP server and logs it in. There is no API key or JWT to paste — Genvid is a single, multitenant server (`mcp.genvid.com`); tenant scoping comes from your signed-in identity and row-level security, not from a per-customer host.
 
 **Claude Code:**
 
-```
-claude mcp add --transport http genvid https://<your-genvid-host>/mcp
-```
+1. Register the server:
+   ```
+   claude mcp add --transport http genvid https://mcp.genvid.com
+   ```
+   This only writes the config — it does not log you in.
+2. Log in: inside a Claude Code session, run `/mcp` and follow the browser OAuth prompt (or run `claude mcp login genvid` from the CLI for a headless flow). Claude Code opens a browser to the Genvid sign-in, you approve the access request, and the agent receives and refreshes the token on its own.
 
-On first use your agent opens a browser to the Genvid sign-in, you approve the access request, and the agent receives and refreshes the token on its own. Every call then runs under your Genvid identity, with row-level security applied — see the `genvid-orientation` skill.
+Every call then runs under your Genvid identity, with row-level security applied — see the `genvid-orientation` skill.
 
-The flow is standard OAuth 2.1 with PKCE and dynamic client registration (RFC 7591 / RFC 9728), so any MCP client that supports browser login (Claude Code, Cursor, and others) connects the same way — point it at `https://<your-genvid-host>/mcp`.
+The flow is standard OAuth 2.1 with PKCE and dynamic client registration (RFC 7591 / RFC 9728), so any MCP client that supports browser login (Claude Code, Cursor, and others) connects the same way — point it at `https://mcp.genvid.com` and complete that client's equivalent login step.
 
 ## Fork & extend
 
@@ -59,14 +62,3 @@ When the boundary ships a breaking change the minor version increments, `boundar
 Every version bump to `pack.json` must be mirrored in `.claude-plugin/marketplace.json`'s self-referencing plugin entry (`source: "./"`) — `scripts/validate_pack.py` enforces this in CI, but if you fork the pack and drop that check, know that a stale marketplace version makes `claude plugin update` silently report "already at the latest version" (#1667).
 
 **Caveat (as of #1966):** the range above is narrowed to match the pack's own `0.2.0` version per this policy, but that match is not yet CI-verified against a live boundary. `get_boundary_contract()` and a `boundary_client` module don't exist on the boundary side yet, so Gate 2 in `scripts/smoke_test.py` still SKIPS instead of checking the real contract version (see the comment near that check). Treat the narrowed range as a documentation-correctness fix, not a verified compatibility claim, until that gate goes live.
-
-## Local validation aid
-
-[`skills-ref`](https://github.com/agentskills/agentskills) (from the `agentskills/agentskills` GitHub repo) is an optional local tool that validates `SKILL.md` files against the Agent Skills schema. It is useful during development but is **not required** and is **not used in CI**. CI uses the bundled `scripts/validate_pack.py` instead.
-
-```sh
-# clone the Agent Skills reference repo, then from its skills-ref/ dir:
-pip install -e .
-# validate a skill directory:
-skills-ref validate genvid-skills/skills/<skill-name>
-```

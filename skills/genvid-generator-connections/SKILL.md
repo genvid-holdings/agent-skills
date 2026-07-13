@@ -56,4 +56,4 @@ For a platform generation, the provider/model of the **enabled connection** the 
 | Generate locally with your own provider and bind the result (primary path) | `genvid-agent-generation` |
 | Have Genvid run the generation, with signed provenance | `genvid-generate-with-provenance` |
 | Generate storyboard keyframes through a connection | `genvid-storyboard` |
-| Full tool list and classifications | `references/boundary-tools.md` |
+| Full tool list and classifications | `../../references/boundary-tools.md` |

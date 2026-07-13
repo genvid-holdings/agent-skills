@@ -10,7 +10,7 @@ Breakdown is Phase A of the production pipeline: it turns a written screenplay i
 
 In this pack **you** do the breakdown. You read the screenplay, decide with your own judgment which cast members, locations, props, and costumes it contains, author an asset record for each, and then link each asset to the scenes it belongs to — citing a verbatim line of the screenplay as the reason. The boundary does not infer assets for you; it validates and records what you author, and it resolves your citations against the real screenplay text.
 
-For OMC terminology used throughout this skill, see `references/omc-vocabulary.md`.
+For OMC terminology used throughout this skill, see `../../references/omc-vocabulary.md`.
 
 ---
 
@@ -122,5 +122,5 @@ Read-only calls (`screenplay_read`, `scenes_read`) run freely.
 | Design the shots that cover each scene | `genvid-scene-shot-design` |
 | Understand how generated media is signed with attested provenance | `genvid-generate-with-provenance` |
 | Understand how `screenplay_write` / `scenes_write` are controlled | `genvid-boundary-gate` |
-| Full tool list and classifications | `references/boundary-tools.md` |
-| OMC terminology reference | `references/omc-vocabulary.md` |
+| Full tool list and classifications | `../../references/boundary-tools.md` |
+| OMC terminology reference | `../../references/omc-vocabulary.md` |

@@ -25,7 +25,7 @@
 - name: media_read
   classification: read_only
   status: live
-  params: [project_id, media_id]
+  params: [project_id, media_ids]
   skill: genvid-agent-generation
 
 - name: ingest_generated_media
@@ -41,10 +41,46 @@
 # registered tier). additive with mandatory HITL binding review. The customer's
 # agent computes hash/fingerprint/metadata + proxy locally and Genvid never sees
 # the original bytes — the registered residency class (offline-media epic #1757).
+# #2207: registration is two steps so the proxy never travels through a tool-call
+# parameter — register_media reserves the row + returns a signed proxy_upload_url
+# (the agent PUTs the proxy bytes directly), then finalize_media_registration
+# records the claim on the uploaded proxy and binds the anchor.
 - name: register_media
   classification: additive
   status: live
-  params: [project_id, link_type, shot_id, asset_id, content_hash, fingerprint_iscc, fingerprint_iscc_content, filename, mime_type, size_bytes, duration_seconds, timecode, locator, locator_type, proxy_base64, proxy_filename, pre_signed_c2pa_manifest, input_media_ids]
+  params: [project_id, link_type, shot_id, asset_id, filename, mime_type, proxy_filename]
+  skill: genvid-media-registration
+
+# status: designed until #2207 deploys to the prod boundary — the boundary-contract
+# smoke checks 'live' tools against mcp.genvid.com, which won't have this new tool
+# until this PR merges and ships. Flip to 'live' in the post-deploy follow-up.
+- name: finalize_media_registration
+  classification: additive
+  status: designed
+  params: [project_id, media_id, link_type, shot_id, asset_id, content_hash, fingerprint_iscc, fingerprint_iscc_content, filename, mime_type, size_bytes, duration_seconds, timecode, locator, locator_type, pre_signed_c2pa_manifest, input_media_ids]
+  skill: genvid-media-registration
+
+# resolve_media is the read-only sibling of media_read (#2023 PR3): media_read
+# returns one signed URL + trust state; resolve_media returns the full residency
+# picture — every locator with its fixity status (status, status_reason,
+# last_verified_at, last_verified_by) and either the Genvid-held proxy_url or the
+# customer's original_locator (shown only with export:media, else null).
+- name: resolve_media
+  classification: read_only
+  status: live
+  params: [project_id, media_id]
+  skill: genvid-agent-generation
+
+# verify_media is the sibling of register_media (#2023): register CREATES a
+# registered-tier registry entry from a proxy + claim; verify MAINTAINS one — the
+# customer's agent recomputes the original's SHA-256 locally and reports its
+# current locator (no proxy, no generation record, no anchor). A hash match
+# rebinds the locator and marks it present (customer-attested); a mismatch flags
+# it missing, distinguishing content-changed-in-place from a mis-aimed locator.
+- name: verify_media
+  classification: additive
+  status: live
+  params: [project_id, media_id, content_hash, locator, locator_type]
   skill: genvid-media-registration
 
 - name: production_read

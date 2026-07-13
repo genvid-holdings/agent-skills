@@ -124,4 +124,4 @@ The human sees the total scope and total cost in the one client allow-prompt, an
 |---|---|
 | Understand how billable/destructive calls are controlled | `genvid-boundary-gate` |
 | Understand signed provenance on each regenerated item | `genvid-generate-with-provenance` |
-| Review the full tool surface and classifications | `references/boundary-tools.md` |
+| Review the full tool surface and classifications | `../../references/boundary-tools.md` |

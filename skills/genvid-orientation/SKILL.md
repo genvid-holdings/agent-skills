@@ -14,9 +14,9 @@ Read this before invoking any other skill. It establishes the contract every age
 
 Genvid exposes its production capabilities as a governed boundary over MCP (and REST). Any MCP-capable agent can drive it. Tools are discovered via MCP; the live surface is method-based — for example, `screenplay_read(method=…)` for reads and `screenplay_write(method=…)` for mutations. The naming pattern holds across the boundary: `*_read` tools are free, and `*_write` tools mutate. Classification on a `*_write` tool is per method: a method that only adds new state (the `create_*` methods, e.g. `production_write(method=create_project)`) is additive, while a method that overwrites or removes existing state (the `update_*` methods) is `destructive`.
 
-A call's classification — `billable` (spends) or `destructive` (overwrites/removes) — is an informational risk signal, not identifiable by name alone: a `*_write` tool's overwriting methods are `destructive` while its `create_*` methods are additive, and billable tools such as `propagate_change` have their own names. Check each tool's classification in `references/boundary-tools.md`.
+A call's classification — `billable` (spends) or `destructive` (overwrites/removes) — is an informational risk signal, not identifiable by name alone: a `*_write` tool's overwriting methods are `destructive` while its `create_*` methods are additive, and billable tools such as `propagate_change` have their own names. Check each tool's classification in `../../references/boundary-tools.md`.
 
-For the full tool list, classifications, and parameter shapes, see `references/boundary-tools.md`.
+For the full tool list, classifications, and parameter shapes, see `../../references/boundary-tools.md`.
 
 ---
 
@@ -32,7 +32,7 @@ Follow these without exception on every call:
 
 - **Provenance is attested on every signed media — two paths.** The primary path is agent-side: your own agent generates locally (its own provider key, which never reaches Genvid), and you bind the result with `ingest_generated_media`; Genvid signs it `externally_attested`. See `genvid-agent-generation`. The secondary path is Genvid-runs-it: a billable generation tool routes through a registered connection and Genvid signs `genvid_witnessed`. See `genvid-generate-with-provenance`. Either way the boundary captures provenance at the point of creation — you do not instrument it yourself.
 
-- **Speak OMC vocabulary.** The boundary and its tooling use canonical OMC terminology. Required preferred terms include: keyframe, character, project, storyboard, tone. See `references/omc-vocabulary.md` for the full avoid→use table. Using a banned term surfaces as a validation failure at the boundary.
+- **Speak OMC vocabulary.** The boundary and its tooling use canonical OMC terminology. Required preferred terms include: keyframe, character, project, storyboard, tone. See `../../references/omc-vocabulary.md` for the full avoid→use table. Using a banned term surfaces as a validation failure at the boundary.
 
 ---
 
@@ -62,5 +62,5 @@ Reads are free. A studio running its own agent against the boundary accepts that
 | Generate locally with your own provider and bind the result (primary) | `genvid-agent-generation` |
 | Register files that already live in your own storage, without uploading them | `genvid-media-registration` |
 | Have Genvid run the generation, with signed provenance | `genvid-generate-with-provenance` |
-| Full tool list and parameter reference | `references/boundary-tools.md` |
-| OMC vocabulary quick reference | `references/omc-vocabulary.md` |
+| Full tool list and parameter reference | `../../references/boundary-tools.md` |
+| OMC vocabulary quick reference | `../../references/omc-vocabulary.md` |

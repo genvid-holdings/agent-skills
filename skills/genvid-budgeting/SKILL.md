@@ -8,7 +8,7 @@ compatibility: Requires a Genvid governed boundary; see pack.json boundary_compa
 
 The production budgeting workflow builds a structured budget and shoot schedule from the project's existing breakdown and storyboard, then lets you explore what-if scenarios and export to EP MMB for use in standard production tools. This skill contains no rate tables, no tenant-specific pricing, and no budget math — all computation lives inside the governed boundary, which applies the inputs you provide and returns computed results.
 
-For OMC terminology used throughout this skill, see `references/omc-vocabulary.md`.
+For OMC terminology used throughout this skill, see `../../references/omc-vocabulary.md`.
 
 ---
 
@@ -172,5 +172,5 @@ When the user needs a rate figure, source it from publicly available references 
 | Run breakdown to populate the scenes and storyboard this skill reads | `genvid-screenplay-breakdown` |
 | Design shots within scenes before budgeting | `genvid-scene-shot-design` |
 | Understand how `additive` and `destructive` tools are controlled | `genvid-boundary-gate` |
-| Full tool list and classifications | `references/boundary-tools.md` |
-| OMC terminology reference | `references/omc-vocabulary.md` |
+| Full tool list and classifications | `../../references/boundary-tools.md` |
+| OMC terminology reference | `../../references/omc-vocabulary.md` |
