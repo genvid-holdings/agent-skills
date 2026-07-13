@@ -15,7 +15,22 @@ claude plugin marketplace add genvid-holdings/agent-skills
 claude plugin install genvid-skills@genvid-skills
 ```
 
-**Other runtimes** (Codex, Gemini CLI, Cursor, OpenHands, and any other agent that loads skills from a directory):
+**OpenAI Codex:**
+
+Codex loads user skills from `~/.agents/skills`. Clone this repository, then copy
+or symlink each skill directory into that location:
+
+```sh
+git clone https://github.com/genvid-holdings/agent-skills.git
+mkdir -p ~/.agents/skills
+ln -s "$PWD/agent-skills"/skills/genvid-* ~/.agents/skills/
+```
+
+Restart Codex if the new skills do not appear immediately. In the Codex CLI or
+IDE extension, run `/skills` or type `$genvid-` to invoke a Genvid skill
+explicitly.
+
+**Other runtimes** (Gemini CLI, Cursor, OpenHands, and any other agent that loads skills from a directory):
 
 Clone the repo and place the `skills/` folder where your agent loads skills:
 
@@ -30,6 +45,23 @@ Note: `.claude-plugin/` is a Claude Code convenience shim and is ignored by othe
 
 Installing the pack teaches your agent *how* to drive the boundary; connecting is a separate, explicit step that points it at the live Genvid MCP server and logs it in. There is no API key or JWT to paste — Genvid is a single, multitenant server (`mcp.genvid.com`); tenant scoping comes from your signed-in identity and row-level security, not from a per-customer host.
 
+**OpenAI Codex:**
+
+```sh
+codex mcp add genvid --url https://mcp.genvid.com
+```
+
+If Codex does not start the browser login during `mcp add`, run:
+
+```sh
+codex mcp login genvid
+```
+
+After authentication, run `codex mcp list` to confirm the server is enabled.
+The ChatGPT desktop app, Codex CLI, and Codex IDE extension share this local
+MCP configuration for the same Codex host. In the Codex TUI, use `/mcp` to view
+connected servers.
+
 **Claude Code:**
 
 1. Register the server:
@@ -41,7 +73,7 @@ Installing the pack teaches your agent *how* to drive the boundary; connecting i
 
 Every call then runs under your Genvid identity, with row-level security applied — see the `genvid-orientation` skill.
 
-The flow is standard OAuth 2.1 with PKCE and dynamic client registration (RFC 7591 / RFC 9728), so any MCP client that supports browser login (Claude Code, Cursor, and others) connects the same way — point it at `https://mcp.genvid.com` and complete that client's equivalent login step.
+The flow is standard OAuth 2.1 with PKCE and dynamic client registration (RFC 7591 / RFC 9728), so any MCP client that supports browser login (OpenAI Codex, Claude Code, Cursor, and others) connects the same way — point it at `https://mcp.genvid.com` and complete that client's equivalent login step.
 
 ## Fork & extend
 
