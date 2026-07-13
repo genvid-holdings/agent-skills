@@ -10,7 +10,15 @@ This is the production phase where the director's intent takes structural form. 
 
 The boundary does not infer shots for you. It gives you the screenplay text and the deterministic coverage lints; the directorial decisions are yours.
 
-For OMC terminology used throughout this skill, see `references/omc-vocabulary.md`. Always use the preferred terms — the avoid list is in that reference.
+For OMC terminology used throughout this skill, see `../../references/omc-vocabulary.md`. Always use the preferred terms — the avoid list is in that reference.
+
+---
+
+## Prerequisites — breakdown should come first
+
+Scene and shot design is Phase C (production). It reads on the structured production data that Phase A **breakdown** produces: scenes populated with their cast, location, and prop assets. Before you compose, confirm breakdown has run — call `scenes_read(method="list", project_id=...)` and check the scenes carry the assets the screenplay implies (and, ideally, that Phase B visual-development asset images exist). If the screenplay has not been broken down yet — no scenes, or scenes with no linked assets — do that first with `genvid-screenplay-breakdown`, so shots are composed with full visual context.
+
+This is advisory guidance, not a blocking check: the boundary does not reject a compose that runs before breakdown, and an agent or user who deliberately wants to storyboard first is free to. But the documented pipeline order is breakdown → visual development → storyboard, and composing after breakdown is what gives each shot its cast/location context.
 
 ---
 
@@ -185,7 +193,7 @@ Each shot carries OMC shot-direction attributes. Use these preferred terms and c
 
 Scene-level mise-en-scène that conditions how shots read: `interior_exterior` (`INT`, `EXT`, `INT_EXT`), `time_of_day` (`DAY`, `NIGHT`, `DAWN`, `DUSK`, `MORNING`, `AFTERNOON`, `EVENING`, `CONTINUOUS`, `LATER`, `MOMENTS_LATER`), `lighting_style` (`HIGH_KEY`, `LOW_KEY`, `AVAILABLE_LIGHT`, `SILHOUETTE`, `CHIAROSCURO`), and `weather` (`CLEAR`, `OVERCAST`, `RAIN`, `STORM`, `SNOW`, `FOG`, `WIND`, `HAZE`).
 
-For the full set of preferred terms and the complete avoid → use mapping, see `references/omc-vocabulary.md`. Do not apply banned terms even when quoting a human's description back — translate to the preferred term.
+For the full set of preferred terms and the complete avoid → use mapping, see `../../references/omc-vocabulary.md`. Do not apply banned terms even when quoting a human's description back — translate to the preferred term.
 
 ---
 
@@ -204,5 +212,5 @@ Read-only calls (`screenplay_read`, `scenes_read`, `shots_read`, `get_storyboard
 | Compose each shot's first frame (bring-your-own-model) | `genvid-storyboard` |
 | Understand how generated media is signed with attested provenance | `genvid-generate-with-provenance` |
 | Understand how `storyboard_write` is controlled | `genvid-boundary-gate` |
-| Full tool list and classifications | `references/boundary-tools.md` |
-| OMC terminology reference | `references/omc-vocabulary.md` |
+| Full tool list and classifications | `../../references/boundary-tools.md` |
+| OMC terminology reference | `../../references/omc-vocabulary.md` |

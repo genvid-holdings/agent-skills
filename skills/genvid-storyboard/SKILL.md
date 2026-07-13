@@ -8,7 +8,7 @@ compatibility: Requires a Genvid governed boundary; see pack.json boundary_compa
 
 Once the storyboard's shots exist, each shot gets a first-frame keyframe. On this path the first frames are **bring-your-own-model**: you run the generation with your own provider and key, and Genvid signs the binding with attested provenance. There is no platform "generate all keyframes" tool here — composing first frames is the bring-your-own-model flow, exactly like asset images.
 
-For OMC terminology used throughout this skill, see `references/omc-vocabulary.md`. Always use preferred terms — the avoid list is in that reference.
+For OMC terminology used throughout this skill, see `../../references/omc-vocabulary.md`. Always use preferred terms — the avoid list is in that reference.
 
 ---
 
@@ -38,6 +38,31 @@ First-frame composition is **not** billed by Genvid — you spend on your own pr
 
 ---
 
+## Resolving a pasted frame citation
+
+Someone may hand you a frame citation — a token copied from the Storyboard grid's citation button that pins one exact keyframe, not "whatever the shot currently shows":
+
+```
+genvid://ref/v1/{project_id}/{shot_id}/{media_id}
+```
+
+All three segments matter: `project_id` and `shot_id` scope the read, `media_id` pins the exact media the citation was copied against — even if the shot's firstFrame is later regenerated or replaced, the citation still resolves to the keyframe someone actually looked at.
+
+A citation always references a whole media record — an image, or a video as a single unit. There is no point-in-time-within-a-video form in v1; treat a token with extra segments as malformed rather than guessing.
+
+To resolve one:
+
+1. Parse the grammar — `v1` is the citation format's own version, independent of `boundary_compat`; a pasted citation should not break because an unrelated tool-contract bump happened after it was copied. Extract `project_id`, `shot_id`, `media_id`.
+2. `media_read(project_id, media_id)` — get the signed URL and trust state (`c2pa_status`, `certified`) for the cited media. This is the bytes for your multimodal input.
+3. `shots_read(method="get", project_id, shot_id)` — get the shot's narrative/cinematography context (`shot_direction`, `action`, `dialog`). A "like this, but tighter" instruction needs this alongside the pixels — the citation is a pointer into the shot's creative intent, not just an image reference.
+4. Feed the signed URL into your own generation step, conditioning on it the same way you would any other reference image (see `genvid-agent-generation`).
+
+If `media_read` can't serve the bytes directly — the media is at the `connected` or `registered` residency tier (see `genvid-media-registration`) — fall back to `resolve_media(project_id, media_id)` to resolve access instead.
+
+No new boundary tool exists for citations — resolution is composed entirely from `media_read` and `shots_read`, both already at boundary v0.5.0.
+
+---
+
 ## Where to go next
 
 | What you want to do | Skill |
@@ -46,5 +71,5 @@ First-frame composition is **not** billed by Genvid — you spend on your own pr
 | Understand how provenance is captured and what gets signed | `genvid-generate-with-provenance` |
 | Understand how billable/destructive calls are controlled | `genvid-boundary-gate` |
 | Understand registered connections and routing | `genvid-generator-connections` |
-| Full tool list and classifications | `references/boundary-tools.md` |
-| OMC terminology reference | `references/omc-vocabulary.md` |
+| Full tool list and classifications | `../../references/boundary-tools.md` |
+| OMC terminology reference | `../../references/omc-vocabulary.md` |

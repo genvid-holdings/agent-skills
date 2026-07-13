@@ -47,4 +47,4 @@ If the backend refuses, the tool returns that error (e.g. a 402 over-budget or a
 |---|---|
 | Run a closure regeneration via `propagate_change` | `genvid-propagate-change` |
 | Generate with signed provenance | `genvid-generate-with-provenance` |
-| Understand the full tool surface and classifications | `references/boundary-tools.md` |
+| Understand the full tool surface and classifications | `../../references/boundary-tools.md` |

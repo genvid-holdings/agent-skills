@@ -26,7 +26,7 @@ On this path you do not pass model identifiers — the boundary writes the provi
 
 The platform generation tools are classified `billable` (see `genvid-boundary-gate`). Call them normally; your MCP client shows its allow-prompt before the call runs, and the backend enforces the project budget — a run that would exceed it is refused pre-spend with HTTP 402. There is no separate step and no approval id. Tell the human it will spend so the client allow-prompt is informed.
 
-A billable generation routes through the enabled connection registered for its `render_type` (Step 1): you supply the `project_id` and the generation's inputs, and the boundary selects the connection and writes its provider/model into the signed submit-record. The specific billable tools and their parameters are listed in `references/boundary-tools.md`.
+A billable generation routes through the enabled connection registered for its `render_type` (Step 1): you supply the `project_id` and the generation's inputs, and the boundary selects the connection and writes its provider/model into the signed submit-record. The specific billable tools and their parameters are listed in `../../references/boundary-tools.md`.
 
 Composing the screenplay into a storyboard (Scene → Beat → Shot) is **not** a billable platform generation on this path — that structure is **agent-authored**, written through `storyboard_write(method='compose')` with your own directorial judgment and verbatim content anchors. See `genvid-scene-shot-design`. Likewise a shot's **first frame** is the bring-your-own-model path: generate with your own provider and bind with `ingest_generated_media`. See `genvid-agent-generation` and `genvid-storyboard`.
 
@@ -63,5 +63,5 @@ Provenance is signed at submit. Certification is completed when a human reviews 
 | Understand how a billable generation call is controlled | `genvid-boundary-gate` |
 | Generate locally with your own provider and bind the result | `genvid-agent-generation` |
 | Understand registered connections and routing | `genvid-generator-connections` |
-| Understand the full tool surface and classifications | `references/boundary-tools.md` |
-| OMC vocabulary reference | `references/omc-vocabulary.md` |
+| Understand the full tool surface and classifications | `../../references/boundary-tools.md` |
+| OMC vocabulary reference | `../../references/omc-vocabulary.md` |

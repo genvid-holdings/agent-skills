@@ -120,4 +120,4 @@ Nothing here blocks you: you may compose from uncertified or unsigned inputs (an
 |---|---|
 | Propagate a change across a whole closure | `genvid-propagate-change` |
 | Understand the boundary's read/control model | `genvid-orientation` |
-| See the full tool list and classifications | `references/boundary-tools.md` |
+| See the full tool list and classifications | `../../references/boundary-tools.md` |

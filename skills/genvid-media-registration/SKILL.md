@@ -12,7 +12,7 @@ A studio points you at a directory of files that already exist in its own storag
 
 This is the registered residency tier. Genvid records a registry entry at the `registered` attestation tier: the claim is signed, the bytes are never verified. It is the honest, day-one-frictionless way to bring an existing catalog under governance — the same index-in-place pattern a storage-gateway appliance provides, except it runs as this skill inside your own agent, so no appliance has to be deployed. The division of labor is deliberate: **you compute identity and proxies locally and reason over them; Genvid governs and certifies the binding.** Exact-duplicate grouping and provenance chaining are reliable precisely because the skill computes them locally and hands the boundary the result.
 
-`register_media` is the one tool this skill drives. It is the sibling of `ingest_generated_media`: same backend path, different attestation. Use `ingest_generated_media` only for media you **just generated** (it carries a generation record — model, prompt, params — signed at the `verified` tier). Use `register_media` for an **existing / archival** file (hash, fingerprint, metadata; no generation record — one would be unverifiable). Never dress up an old file as a fresh generation, and never register through `ingest_generated_media`.
+This skill drives two tools — `register_media` (reserve + get a proxy upload URL) and `finalize_media_registration` (record the claim once the proxy is uploaded). Together they are the sibling of `ingest_generated_media`: same backend path, different attestation. Use `ingest_generated_media` only for media you **just generated** (it carries a generation record — model, prompt, params — signed at the `verified` tier). Use this registration pair for an **existing / archival** file (hash, fingerprint, metadata; no generation record — one would be unverifiable). Never dress up an old file as a fresh generation, and never register through `ingest_generated_media`.
 
 ---
 
@@ -86,26 +86,39 @@ Present the index so a human can act on it: group by disposition, show each file
 
 ---
 
-## Step 4 — Register the approved bindings with register_media
+## Step 4 — Register the approved bindings (three steps, proxy uploaded directly)
 
-For each approved `bind` file, call `register_media` once, binding it to the **one** anchor it represents. Genvid stores the proxy + the claim; the original stays where it is.
+For each approved `bind` file, register it in **three steps**, binding it to the **one** anchor it represents. Genvid stores the proxy + the claim; the original stays where it is. **The proxy bytes are uploaded DIRECTLY to a signed URL — never inlined as a tool parameter.** (Inlining the whole proxy as base64 was unreviewable in the permission prompt, corrupted under hand-transcription, and forced destructive downscaling — the direct-upload channel removes all three failure modes.)
+
+**Step 4a — `register_media` (reserve + get an upload URL).** Hand Genvid the anchor and the original's identity-for-typing; it returns a pending `media_id` and a signed `proxy_upload_url`.
 
 | Parameter | What to supply |
 |---|---|
 | `project_id` | The project the media belongs to |
 | `link_type` | The slot the media fills — see the anchor mapping below |
 | `shot_id` *or* `asset_id` | The anchor — provide **exactly one** |
+| `filename` | The **original's** display filename (its extension sets `media_type`) — not a Genvid path; the original lives offsite |
+| `mime_type` | IANA MIME type of the original |
+| `proxy_filename` | Filename for the proxy (its extension sets the proxy's content type) |
+
+**Step 4b — upload the proxy directly.** PUT the small locally-generated proxy bytes to the returned `proxy_upload_url` — a plain multipart HTTP PUT (field name `file`), exactly like `curl -X PUT "$proxy_upload_url" -F "file=@proxy.jpg"`. The bytes go straight to storage; they never pass through the model or a tool call. The URL already embeds the upload token in its query string, so no auth header is needed.
+
+**Step 4c — `finalize_media_registration` (record the claim).** Hand Genvid the full claim; it verifies the proxy landed, records the registry entry at the `registered` tier, and binds the anchor.
+
+| Parameter | What to supply |
+|---|---|
+| `project_id` / `media_id` | The project + the pending `media_id` from step 4a |
+| `link_type` | Same slot as step 4a |
+| `shot_id` *or* `asset_id` | Same anchor as step 4a — provide **exactly one** |
 | `content_hash` | The SHA-256 you computed locally (64-char hex) |
 | `fingerprint_iscc` | The composite ISCC (Data+Instance); omit if unavailable |
 | `fingerprint_iscc_content` | The media-decoded ISCC Content-Code; omit if unavailable for this subtype |
-| `filename` | The **original's** display filename (its extension sets `media_type`) — not a Genvid path; the original lives offsite |
+| `filename` | The **original's** display filename (must match step 4a) |
 | `mime_type` | IANA MIME type of the original |
 | `size_bytes` | Size of the original, measured locally |
 | `duration_seconds` / `timecode` | For time-based media; omit for stills |
 | `locator` | Path/key of the original **relative to the customer storage root** (a SAN path or S3 key) — never a Genvid path |
 | `locator_type` | `customer_path` (SAN) or `customer_s3` |
-| `proxy_base64` | The local proxy, base64-encoded — the only media Genvid stores |
-| `proxy_filename` | Filename for the proxy (its extension sets the proxy's content type) |
 | `pre_signed_c2pa_manifest` | The original's embedded C2PA manifest as a JSON-object string, **if** you read one — chained by reference, never re-rooted. Omit when there is no manifest |
 | `input_media_ids` | Existing Genvid media IDs that are provenance inputs (rare for an archival original; usually empty) |
 
@@ -125,7 +138,7 @@ For each approved `bind` file, call `register_media` once, binding it to the **o
 
 ### What the tool is classified as
 
-`register_media` is `additive`: it adds a new registry media + link without overwriting or removing anything, and without spending. Your own request to register this directory is the authorization; your MCP client does not prompt for an additive call. The media appears bound to its anchor — at the `registered` tier — as soon as the call returns.
+Both `register_media` and `finalize_media_registration` are `additive`: they add a new registry media + link without overwriting or removing anything, and without spending. Your own request to register this directory is the authorization; your MCP client does not prompt for an additive call. The proxy bytes go straight to storage over the signed upload URL (never through a tool call), and the media appears bound to its anchor — at the `registered` tier — as soon as `finalize_media_registration` returns.
 
 ---
 
@@ -144,5 +157,5 @@ Said plainly: a registered media's hash is a **customer claim**, honestly labele
 | Understand the boundary's read/control model and the three residency classes | `genvid-orientation` |
 | Generate new media with your own provider and bind it (verified tier) | `genvid-agent-generation` |
 | Run a controlled (billable or destructive) call | `genvid-boundary-gate` |
-| Full tool list and parameter reference | `references/boundary-tools.md` |
-| OMC vocabulary quick reference | `references/omc-vocabulary.md` |
+| Full tool list and parameter reference | `../../references/boundary-tools.md` |
+| OMC vocabulary quick reference | `../../references/omc-vocabulary.md` |
