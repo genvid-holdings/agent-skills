@@ -93,7 +93,19 @@ The bound first frame is signed and carries `input_certification` — `all_certi
 
 ## Generating a shot's video
 
-Video follows the same shape as a first frame, with two differences: you bind to the `shot_video` slot, and in Step 0 you claim the shot's **`video`** task, not `keyframe`. `ingest_generated_media(project_id=..., link_type="shot_video", shot_id=..., render_type=<T2V | I2V | KF2V | ...>, model_provider=..., model_name=..., prompt=..., params=..., source_url=<provider result url>, input_media_ids=[<the keyframe media_ids you conditioned on, if any>])`. Claim+start the `video` task for **each** shot before binding its video; when you render a scene's worth of shots, do it per shot in the same loop, never a batch that binds first and claims later (or never). The same Step 0 rule covers a shot's dialogue against the **`audio`** task once a dialogue bind path is available to you.
+Video follows the same shape as a first frame, with two differences: you bind to the `shot_video` slot, and in Step 0 you claim the shot's **`video`** task, not `keyframe`. `ingest_generated_media(project_id=..., link_type="shot_video", shot_id=..., render_type=<T2V | I2V | KF2V | ...>, model_provider=..., model_name=..., prompt=..., params=..., source_url=<provider result url>, input_media_ids=[<the keyframe media_ids you conditioned on, if any>])`. Claim+start the `video` task for **each** shot before binding its video; when you render a scene's worth of shots, do it per shot in the same loop, never a batch that binds first and claims later (or never).
+
+---
+
+## Generating a shot's dialogue (audio)
+
+Dialogue uses the shot's **`audio`** task lane. Claim it exactly like keyframe/video:
+
+1. **Claim + start the audio task.** `production_write(method="create_assignment", project_id=..., resource_type="shot", resource_id=<shot_id>, task_type="audio", workflow_status="in_progress")`.
+2. **Generate the dialogue with your own TTS (or S2S) model.**
+3. **Bind it.** `ingest_generated_media(project_id=..., link_type="shot_dialog", shot_id=..., render_type=<TTS | S2S>, model_provider=..., model_name=..., prompt=..., params=..., source_url=<provider result url>)`.
+
+Two axes, one concept: you **claim and bind** on the `audio` lane (`task_type="audio"`, `link_type="shot_dialog"`), and you **price** it on `production_read` as `generation_type="dialog"`. Omit `input_media_ids` for dialogue — there is no audio input-link slot yet.
 
 ---
 

@@ -83,6 +83,24 @@
   params: [project_id, media_id, content_hash, locator, locator_type]
   skill: genvid-media-registration
 
+# connect_media is the explicit, HITL-triggered registered->connected residency flip
+# (#2283 D4): the customer's agent names the storage connection + object key where an
+# already-registered media's bytes actually live; Genvid streams the object
+# transiently, verifies its hash against the registered claim, and on a match flips
+# the media to connected (a new customer_s3 locator is added, the original
+# customer_path row is kept as history). additive — never destructive/automatic; a
+# mismatch refuses the flip. Reaches the backend via PATCH .../media/{media_id}
+# storage_class="connected" (#2283/#2284 PR3 remodel — per-route review rejected a
+# dedicated /actions/connect route since storage_class is a settable media field);
+# tool name/contract unchanged. status: designed until this PR deploys to the prod
+# boundary (same reasoning as finalize_media_registration above) — flip to live in
+# the post-deploy follow-up.
+- name: connect_media
+  classification: additive
+  status: designed
+  params: [project_id, media_id, locator, connection_name]
+  skill: genvid-media-registration
+
 - name: production_read
   classification: read_only
   status: live
