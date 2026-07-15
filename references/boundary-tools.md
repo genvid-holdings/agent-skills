@@ -15,6 +15,7 @@
 | `finalize_media_registration` | additive | **designed** | `project_id`, `media_id`, `link_type`, `shot_id`, `asset_id`, `content_hash`, `fingerprint_iscc`, `fingerprint_iscc_content`, `filename`, `mime_type`, `size_bytes`, `duration_seconds`, `timecode`, `locator`, `locator_type`, `pre_signed_c2pa_manifest`, `input_media_ids` | genvid-media-registration |
 | `resolve_media` | read_only | live | `project_id`, `media_id` | genvid-agent-generation |
 | `verify_media` | additive | live | `project_id`, `media_id`, `content_hash`, `locator`, `locator_type` | genvid-media-registration |
+| `connect_media` | additive | **designed** | `project_id`, `media_id`, `locator`, `connection_name` | genvid-media-registration |
 | `production_read` | read_only | live | `method`, `project_id`, `resource_type`, `resource_id`, `assigned_to` | genvid-agent-generation |
 | `production_write` | additive | live | `method`, `project_id`, `resource_type`, `resource_id`, `task_type`, `assigned_to_email`, `workflow_status`, `priority` | genvid-agent-generation |
 | `screenplay_read` | read_only | live | `method`, `project_id` | genvid-screenplay-breakdown |

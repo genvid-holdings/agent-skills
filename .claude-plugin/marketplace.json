@@ -11,7 +11,7 @@
       "name": "genvid-skills",
       "source": "./",
       "description": "Genvid reference skill pack — teaches any MCP-capable agent to drive the Genvid governed boundary.",
-      "version": "0.5.0"
+      "version": "0.5.2"
     }
   ]
 }
