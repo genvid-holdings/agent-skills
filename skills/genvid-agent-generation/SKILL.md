@@ -39,6 +39,8 @@ Do this as ONE `create_assignment` call per resource, not a separate assign-then
 
 ## Step 1 — Generate with your own provider
 
+**Preflight — confirm your provider is wired.** Before generating, confirm a provider is wired into your client. If none is wired yet, wire the provider's own MCP server (such as FAL's) now — Genvid never sees the key.
+
 **Need existing Genvid media as an input?** For I2I composition (a shot's first frame conditioned on its cast and location images, an edit of an existing render, …) pull each input with `media_read(project_id=..., media_id=...)`. It returns a short-lived **signed URL** you download and hand to your own provider, plus the media's trust state (`certified`, `c2pa_status`, `input_certification`) so you know what you are using. Reading is never gated — it returns any media you can see — but if you compose from uncertified inputs that is recorded honestly on the result (see the trust label below). Keep the `media_id`s you used: pass them as `input_media_ids` when you bind, so the provenance graph shows they led to your output.
 
 Wire your provider's own MCP server (or any local generation tool) into your client and generate the media there, with your own key. Genvid is not involved in this step and never sees your key. The output you need is **the provider's hosted result URL** (the link the provider's tool returns — e.g. a `fal.media` URL) and the values you generated with: the model, the prompt, and the parameters.
@@ -105,7 +107,29 @@ Dialogue uses the shot's **`audio`** task lane. Claim it exactly like keyframe/v
 2. **Generate the dialogue with your own TTS (or S2S) model.**
 3. **Bind it.** `ingest_generated_media(project_id=..., link_type="shot_dialog", shot_id=..., render_type=<TTS | S2S>, model_provider=..., model_name=..., prompt=..., params=..., source_url=<provider result url>)`.
 
-Two axes, one concept: you **claim and bind** on the `audio` lane (`task_type="audio"`, `link_type="shot_dialog"`), and you **price** it on `production_read` as `generation_type="dialog"`. Omit `input_media_ids` for dialogue — there is no audio input-link slot yet.
+Two axes, one concept: you **claim and bind** on the `audio` lane (`task_type="audio"`, `link_type="shot_dialog"`), and you **price** it on `production_read` as `generation_type="dialog"`. If the dialogue derives from a source clip (e.g. an S2S source voice), pass it in `input_media_ids` — it is recorded as a `source_audio` derivation link; text-only TTS has no input to pass.
+
+---
+
+## Generating a shot's sound effects (SFX)
+
+SFX shares the shot's **`audio`** task lane with dialogue and music — claim it the same way:
+
+1. **Claim + start the audio task.** `production_write(method="create_assignment", project_id=..., resource_type="shot", resource_id=<shot_id>, task_type="audio", workflow_status="in_progress")`.
+2. **Generate the sound effect with your own T2A model.**
+3. **Bind it.** `ingest_generated_media(project_id=..., link_type="shot_sfx", shot_id=..., render_type="T2A", model_provider=..., model_name=..., prompt=..., params=..., source_url=<provider result url>)`.
+
+## Generating a shot's music
+
+Music also shares the shot's **`audio`** task lane — claim it the same way:
+
+1. **Claim + start the audio task.** `production_write(method="create_assignment", project_id=..., resource_type="shot", resource_id=<shot_id>, task_type="audio", workflow_status="in_progress")`.
+2. **Generate the score with your own T2M model.**
+3. **Bind it.** `ingest_generated_media(project_id=..., link_type="shot_music", shot_id=..., render_type="T2M", model_provider=..., model_name=..., prompt=..., params=..., source_url=<provider result url>)`.
+
+Two axes, one concept, same as dialogue: you **claim and bind** on the `audio` lane (`task_type="audio"`, `link_type="shot_sfx"` or `link_type="shot_music"`), and you **price** it on `production_read` as `generation_type="sfx"` or `generation_type="music"`. If the SFX/music derives from a source clip, pass it in `input_media_ids` — it is recorded as a `source_audio` derivation link; text-only T2A/T2M has no input to pass.
+
+Pricing caveat (all lanes): `get_cost_estimate` prices against **Genvid's model catalog** (the response says so in `cost_basis`); since you generate with your own model and key, your actual cost is whatever your provider charges — treat the figure as a catalog-reference planning proxy.
 
 ---
 
