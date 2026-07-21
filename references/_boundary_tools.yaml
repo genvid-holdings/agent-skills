@@ -113,6 +113,23 @@
   params: [method, project_id, resource_type, resource_id, task_type, assigned_to_email, workflow_status, priority]
   skill: genvid-agent-generation
 
+# review_read / review_write are the boundary feedback surface (#2423): reading
+# review transitions/comments/auto-demotion provenance, and writing decision-events
+# (transcribed rulings, automated pipeline findings, iteration-chain summaries).
+# status: designed until this PR deploys to the prod boundary (same reasoning as
+# finalize_media_registration above) — flip to live in the post-deploy follow-up.
+- name: review_read
+  classification: read_only
+  status: designed
+  params: [method, resource_type, resource_id, task_type, page, page_size]
+  skill: genvid-agent-generation
+
+- name: review_write
+  classification: additive
+  status: designed
+  params: [method, project_id, media_id, assignment_id, note, critique_tags, scope_target, dimension, severity, chain_id]
+  skill: genvid-agent-generation
+
 - name: screenplay_read
   classification: read_only
   status: live
