@@ -18,6 +18,8 @@
 | `connect_media` | additive | **designed** | `project_id`, `media_id`, `locator`, `connection_name` | genvid-media-registration |
 | `production_read` | read_only | live | `method`, `project_id`, `resource_type`, `resource_id`, `assigned_to` | genvid-agent-generation |
 | `production_write` | additive | live | `method`, `project_id`, `resource_type`, `resource_id`, `task_type`, `assigned_to_email`, `workflow_status`, `priority` | genvid-agent-generation |
+| `review_read` | read_only | **designed** | `method`, `resource_type`, `resource_id`, `task_type`, `page`, `page_size` | genvid-agent-generation |
+| `review_write` | additive | **designed** | `method`, `project_id`, `media_id`, `assignment_id`, `note`, `critique_tags`, `scope_target`, `dimension`, `severity`, `chain_id` | genvid-agent-generation |
 | `screenplay_read` | read_only | live | `method`, `project_id` | genvid-screenplay-breakdown |
 | `screenplay_write` | destructive | live | `method`, `project_id`, `content` | genvid-screenplay-breakdown |
 | `scenes_read` | read_only | live | `method`, `project_id`, `scene_id` | genvid-scene-shot-design |

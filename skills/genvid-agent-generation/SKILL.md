@@ -43,7 +43,7 @@ Do this as ONE `create_assignment` call per resource, not a separate assign-then
 
 **Need existing Genvid media as an input?** For I2I composition (a shot's first frame conditioned on its cast and location images, an edit of an existing render, …) pull each input with `media_read(project_id=..., media_id=...)`. It returns a short-lived **signed URL** you download and hand to your own provider, plus the media's trust state (`certified`, `c2pa_status`, `input_certification`) so you know what you are using. Reading is never gated — it returns any media you can see — but if you compose from uncertified inputs that is recorded honestly on the result (see the trust label below). Keep the `media_id`s you used: pass them as `input_media_ids` when you bind, so the provenance graph shows they led to your output.
 
-Wire your provider's own MCP server (or any local generation tool) into your client and generate the media there, with your own key. Genvid is not involved in this step and never sees your key. The output you need is **the provider's hosted result URL** (the link the provider's tool returns — e.g. a `fal.media` URL) and the values you generated with: the model, the prompt, and the parameters.
+Wire your provider's own MCP server (or any local generation tool) into your client and generate the media there, with your own key. Genvid is not involved in this step and never sees your key. What you need from it is **either the provider's hosted result URL** (the link the provider's tool returns — e.g. a `fal.media` URL) **or the local file path** it wrote (Codex built-in imagegen, local ComfyUI) — that choice decides how you bind in Step 2 — plus the values you generated with: the model, the prompt, and the parameters.
 
 Hold onto those values exactly as you used them. They become the signed provenance in the next step.
 
@@ -51,17 +51,29 @@ Hold onto those values exactly as you used them. They become the signed provenan
 
 ## Step 2 — Bind it to Genvid with provenance
 
-Call `ingest_generated_media` with the result and what you used. Supply the media **one of two ways — `source_url` or `image_base64` — never both**:
+How you bind depends on **what your generator produced** — a hosted URL, or a file on disk.
 
-- **`source_url` (use this).** Pass the provider's hosted result URL. Genvid downloads the bytes itself, SSRF-fenced to the attested provider's result CDN. This is the right path for a real image: you never have to move the bytes through a tool call, where a large base64 blob is infeasible to emit and a single corrupted character ruins the file. URL ingest is supported for providers whose result CDN Genvid has vetted (e.g. `fal`).
-- **`image_base64` (fallback).** Only for a genuinely small payload, or a provider that returns bytes rather than a URL. The base64-encoded bytes; Genvid signs them verbatim.
+**Your generator returned a hosted URL** (FAL and most hosted providers) → call `ingest_generated_media` with **`source_url`**. Genvid downloads the bytes itself, SSRF-fenced to the attested provider's result CDN. You never move bytes through a tool call. URL ingest is supported for providers whose result CDN Genvid has vetted (e.g. `fal`).
+
+**Your generator wrote a file to disk** (OpenAI Codex's built-in image generation, a local ComfyUI — anything producing a local path, never a URL) → bind with the **`genvid` CLI**, which runs on your machine and streams the file as a lossless multipart upload:
+
+```sh
+genvid import-generated-media <project-id> -c multipart \
+  'rendered_output: @/path/to/image.png, model_provider: openai,
+   model_name: codex-built-in-imagegen, render_type: T2I,
+   link_type: shot_firstframe, shot_id: <shot-id>, params: {}'
+```
+
+The `@` prefix streams the file itself — full resolution, byte-for-byte, signed exactly as written. This is the **only** lossless path for a locally-generated file, and it takes the same provenance fields as the MCP tool (same route, same attestation, same task-claim gate from Step 0). Install once with `brew install genvid-holdings/genvid/genvid` (or the install script) and log in through your browser on first use.
+
+> **Do not reach for `image_base64` for a real image.** It exists only for a genuinely tiny payload. A full-resolution image encoded into a tool call is impractical and gets **silently truncated** — Genvid then signs a corrupt file that looks successful. If your generator wrote a local file, use the CLI above.
 
 | Parameter | What to supply |
 |---|---|
 | `project_id` | The project the media belongs to |
 | `link_type` | The slot the media fills: a shot slot (`shot_firstframe` / `shot_keyframe` / `shot_lastframe` / `shot_video`) or an asset image slot (`cast_member_image` / `location_image` / `prop_image` / ...) |
 | `shot_id` *or* `asset_id` | The anchor — provide exactly one |
-| `source_url` *or* `image_base64` | The result — the provider's hosted URL (preferred), or the base64 bytes for a small payload. Exactly one |
+| `source_url` *or* `image_base64` | The result — the provider's hosted URL (preferred), or the base64 bytes for a genuinely tiny payload. Exactly one. *Generated to a local file instead? Use the `genvid` CLI's `rendered_output: @<path>` above, not base64.* |
 | `filename` | A filename whose extension sets the content type (e.g. `flux.png`) |
 | `model_provider` | The provider you generated through (e.g. `fal`), as you used it — also selects the vetted CDN allowlist for `source_url` |
 | `model_name` | The model you generated with (e.g. `fal-ai/flux/schnell`), as you used it |
@@ -85,7 +97,7 @@ Composing a shot's first frame is the canonical I2I case: you condition on the s
 4. **Pull the input bytes.** `media_read(project_id=..., media_id=...)` for each chosen image → download its `signed_url` and hand the bytes to your own provider.
 5. **(Optional) enrich the prompt.** `enhance_prompt(context_type="shot_keyframe", project_id=..., id=<shot_id>, model_id=<your I2I model>)` returns a production-context-aware prompt.
 6. **Compose with your own provider** (I2I), conditioning on the cast/location images + the shot direction.
-7. **Bind to the shot.** `ingest_generated_media(project_id=..., link_type="shot_firstframe", shot_id=..., render_type="I2I", model_provider=..., model_name=..., prompt=..., params=..., source_url=<provider result url>, input_media_ids=[<the image media_ids>], input_link_type="firstframe_source_image")`.
+7. **Bind to the shot.** `ingest_generated_media(project_id=..., link_type="shot_firstframe", shot_id=..., render_type="I2I", model_provider=..., model_name=..., prompt=..., params=..., source_url=<provider result url>, input_media_ids=[<the image media_ids>], input_link_type="firstframe_source_image")`. This form is for a **hosted result URL**; if your generator wrote a **local file**, bind it with the `genvid` CLI instead — same fields — `genvid import-generated-media <project-id> -c multipart 'rendered_output: @<path>, link_type: shot_firstframe, shot_id: <shot-id>, render_type: I2I, model_provider: ..., model_name: ..., input_media_ids: [...], input_link_type: firstframe_source_image, params: {}'` (per the URL-vs-local-file split in Step 2).
 
 The bound first frame is signed and carries `input_certification` — `all_certified` if every cast/location image you used was certified, `mixed`/`none_certified` otherwise. That is the honest record of what you composed from; nothing blocks an uncertified compose, it is just labelled.
 

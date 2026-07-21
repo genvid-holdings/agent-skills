@@ -75,6 +75,26 @@ Every call then runs under your Genvid identity, with row-level security applied
 
 The flow is standard OAuth 2.1 with PKCE and dynamic client registration (RFC 7591 / RFC 9728), so any MCP client that supports browser login (OpenAI Codex, Claude Code, Cursor, and others) connects the same way — point it at `https://mcp.genvid.com` and complete that client's equivalent login step.
 
+## The `genvid` CLI — required to bind locally-generated files
+
+The skills + MCP connection above cover everything **except one path**: binding media your agent generated to a **local file** (OpenAI Codex's built-in image generation, a local ComfyUI — anything that writes bytes to disk rather than returning a hosted provider URL). The MCP server is remote and cannot read your disk, and base64 corrupts a full-resolution image, so this bind runs through the `genvid` CLI, which streams the file losslessly from the machine that holds it.
+
+If your agent only uses hosted-URL providers (FAL and most cloud generators), you don't need the CLI — `ingest_generated_media` with `source_url` covers you. Install it when you need the local-file path:
+
+```sh
+brew install genvid-holdings/genvid/genvid   # macOS/Linux (Homebrew)
+# or the install script:
+curl -fsSL https://github.com/genvid-holdings/genvid-cli/releases/latest/download/install.sh | sh
+```
+
+Then log in once (browser OAuth, same identity as your MCP connection):
+
+```sh
+genvid login
+```
+
+The `genvid-agent-generation` skill drives the rest — it routes a local file to `genvid import-generated-media <project> -c multipart 'rendered_output: @<path>'`, which binds the bytes byte-for-byte and signs the same attested provenance as the MCP tool.
+
 ## Fork & extend
 
 Fork the public repo, add your own skills alongside the reference ones, and fill in `AGENTS.md` with your studio's house rules (naming conventions, tightened gates, show-specific prompt conventions). The reference skills in `skills/` are unchanged and continue to teach the boundary; your additions layer on top.
