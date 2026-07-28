@@ -6,6 +6,27 @@ This is the Genvid reference skill pack: a runtime-agnostic [Agent Skills](https
 
 The pack carries no tenant data. Each skill describes how to call the Genvid boundary — orienting the agent, connecting to generators, generating with provenance, gating destructive operations, propagating changes, and driving the production workflow from screenplay through storyboard. The pack version is matched to the boundary via `boundary_compat` in `pack.json`; see Compatibility below.
 
+One skill is the exception, and it is the one to start with if you have never heard of Genvid: **`genvid-article50-readiness`** drives no boundary tool at all and runs entirely offline.
+
+## Article 50 readiness (no account, no network)
+
+Article 50 of the EU AI Act ([Regulation (EU) 2024/1689](https://eur-lex.europa.eu/eli/reg/2024/1689/oj)) applies from **2 August 2026**. It puts transparency duties on the providers and deployers of systems that generate or manipulate media — machine-readable marking of synthetic output, and disclosure of deep fakes.
+
+`skills/genvid-article50-readiness/` ships a standalone CLI that audits a local directory of assets against those duties and emits two artifacts: a **machine-readable disclosure report** (JSON, one record per asset) and a **gap list** (Markdown, one entry per unresolved item with the remediation that closes it).
+
+```sh
+git clone https://github.com/genvid-holdings/agent-skills.git
+python3 agent-skills/skills/genvid-article50-readiness/article50_scan.py /path/to/production -o ./article50-out
+```
+
+That is the whole setup. **No Genvid account, no sign-up, no upload, no network call, and no dependency outside the Python 3.9+ standard library.** Your material never leaves the machine. Exit status is `0` when no gaps were recorded and `1` when at least one was, so it works as a delivery gate in CI.
+
+It reads what each file actually carries — content credentials (JPEG APP11 JUMBF, PNG `caBX`, WebP `C2PA` chunk, BMFF `uuid` box, `.c2pa` sidecars), the IPTC digital source type in XMP, generator metadata left by common pipelines — and reconciles that against an operator-authored `article50.json` declaration ([format](skills/genvid-article50-readiness/DECLARATION.md)).
+
+It also keeps two things apart that are commonly conflated: Article 50(2) requires marking **and** detectability, not just marking; and a machine-readable marking does not discharge the Article 50(4) deep-fake disclosure duty, because such markings are not clear and distinguishable to the people exposed to the content. A signed manifest with no on-screen disclosure is reported as the gap it is.
+
+**What it does not do.** It reports evidence and the absence of evidence. It does not determine compliance, and its output is not legal advice — that turns on facts a file scan cannot see. It does not assess imperceptible watermarks, because detecting one requires the detector matching the embedder; a watermark can be declared in the declaration but is never confirmed here. Its content-credential detection is presence-only: finding a manifest says nothing about whether the signature validates or whether the signer is one anyone downstream recognises. Absence of a signal is not evidence of a camera — embedded metadata does not survive a transcode or a re-encode, so unmarked assets are reported as undetermined rather than guessed at. And the formats it reads are industry conventions: neither content credentials nor the IPTC digital source type is named in the Regulation, the Commission's guidelines, or the code of practice, none of which mandates a particular standard. The full scope limits are in the skill's [SKILL.md](skills/genvid-article50-readiness/SKILL.md) and are printed in every report.
+
 ## Install
 
 **Claude Code:**
