@@ -1,20 +1,56 @@
-# Curated boundary-tools contract.
+# Boundary-tools contract.
 # Source of truth for boundary-tools.md — do not edit generated output by hand.
-# status: live   = exists on main today; smoke test validates names + params.
-# status: designed = net-new; smoke test treats as pending (not failing).
 #
-# classification is an informational risk signal:
+# Scope rule: this file enumerates the boundary's supported surface — the 27 tools
+# Genvid publishes, supports, and expects an agent to build on. It is complete in
+# the direction that matters to you: every tool listed here is registered on the
+# prod boundary and validated against it name-by-name and param-by-param by the
+# pack's smoke test, so the contract cannot quietly fall behind what prod serves.
+#
+# status: live     = registered on the prod boundary; the smoke test validates name + params against it.
+# status: designed = specified but not yet on the prod boundary; the smoke test treats it as pending, not failing.
+#
+# params IS a curated subset by design: it names the fields an agent actually
+# reaches for, not every field of the tool's Inputs model (production_write
+# accepts about thirty). Every param named here must exist on the tool —
+# scripts/check_pack_inputs_sync.py enforces that direction in CI.
+#
+# skill names the skill in this pack that teaches the tool, and is blank where no
+# skill covers it yet — in that case the tool's own MCP description is the only
+# guidance. A blank cell is a gap in this pack, not a statement about the tool.
+#
+# classification mirrors the tool's registered ToolRiskClass in code:
 #   read_only  = free, runs immediately.
 #   additive   = adds new state; no spend, no overwrite.
 #   billable   = spends; your MCP client prompts to allow it and the backend enforces the project budget (HTTP 402 pre-spend if it would exceed).
 #   destructive = overwrites/removes existing state; your MCP client prompts to allow it and the backend enforces permission.
-# Every billable/destructive call is audit-logged in entity_events. There is no bespoke server-side approval step and no approval id.
+#
+# Audit: a database trigger writes an entity_events row whenever a project,
+# sequence, scene, beat, shot, asset, screenplay, media, signed manifest, or
+# certification is created, changed, or removed — and likewise for every link
+# binding media, shots, assets, and scenes to one another (including the
+# input-media chain ingest_generated_media records from input_media_ids), and for
+# a change to a media's locator. Writes that touch none of those produce no
+# entity_events row, so read the classification column as a risk signal, not as an
+# audit guarantee: review_write records a decision_event instead, and a task's
+# workflow_status transitions are recorded in the review history that
+# review_read returns. There is no bespoke server-side approval step and no approval id —
+# human intent is captured by your MCP client's own tool-permission prompt, while
+# permission (PBAC) and budget stay server-side (ADR-018).
 
 - name: discovery_read
   classification: read_only
   status: live
-  params: [method, source_type, source_id]
+  params: [method, project_id, query, model_type, source_type, source_id, run_id]
   skill: genvid-propagate-change
+
+# analytics_read reports on work already done — project health (shot/scene counts,
+# approval rate, asset breakdown, cost against budget), a 2-10 project comparison,
+# or a cost breakdown by artist, asset, or model.
+- name: analytics_read
+  classification: read_only
+  status: live
+  params: [method, project_id, project_ids, breakdown_by, date_from, date_to, asset_type]
 
 - name: propagate_change
   classification: billable
@@ -31,12 +67,15 @@
 - name: ingest_generated_media
   classification: additive
   status: live
-  params: [project_id, link_type, shot_id, asset_id, source_url, image_base64, model_provider, model_name, render_type, prompt, params, input_media_ids, input_link_type]
+  params: [project_id, link_type, shot_id, asset_id, source_url, image_base64, filename, model_provider, model_name, render_type, prompt, params, input_media_ids, input_link_type]
   skill: genvid-agent-generation
 
 # register_media is the sibling of ingest_generated_media (#2022): same backend
 # path, split by attestation semantics. ingest claims "I just generated this"
-# (generation record, verified tier, billable flow); register claims only "this
+# (generation record the CUSTOMER's agent reports, so it signs externally_attested and
+# certifies at the ATTESTED tier — Genvid holds the bytes but did not witness the
+# generation; this said "verified tier" until #2575 corrected the over-claim —
+# billable flow); register claims only "this
 # file exists in my storage" (hash/fingerprint/metadata, no generation record,
 # registered tier). additive with mandatory HITL binding review. The customer's
 # agent computes hash/fingerprint/metadata + proxy locally and Genvid never sees
@@ -48,16 +87,13 @@
 - name: register_media
   classification: additive
   status: live
-  params: [project_id, link_type, shot_id, asset_id, filename, mime_type, proxy_filename]
+  params: [project_id, link_type, shot_id, asset_id, filename, mime_type, proxy_filename, storage_class, connection_name]
   skill: genvid-media-registration
 
-# status: designed until #2207 deploys to the prod boundary — the boundary-contract
-# smoke checks 'live' tools against mcp.genvid.com, which won't have this new tool
-# until this PR merges and ships. Flip to 'live' in the post-deploy follow-up.
 - name: finalize_media_registration
   classification: additive
-  status: designed
-  params: [project_id, media_id, link_type, shot_id, asset_id, content_hash, fingerprint_iscc, fingerprint_iscc_content, filename, mime_type, size_bytes, duration_seconds, timecode, locator, locator_type, pre_signed_c2pa_manifest, input_media_ids]
+  status: live
+  params: [project_id, media_id, link_type, shot_id, asset_id, content_hash, fingerprint_iscc, fingerprint_iscc_content, filename, mime_type, size_bytes, duration_seconds, timecode, locator, locator_type, pre_signed_c2pa_manifest, input_media_ids, storage_class, connection_name]
   skill: genvid-media-registration
 
 # resolve_media is the read-only sibling of media_read (#2023 PR3): media_read
@@ -92,23 +128,47 @@
 # mismatch refuses the flip. Reaches the backend via PATCH .../media/{media_id}
 # storage_class="connected" (#2283/#2284 PR3 remodel — per-route review rejected a
 # dedicated /actions/connect route since storage_class is a settable media field);
-# tool name/contract unchanged. status: designed until this PR deploys to the prod
-# boundary (same reasoning as finalize_media_registration above) — flip to live in
-# the post-deploy follow-up.
+# tool name/contract unchanged.
 - name: connect_media
   classification: additive
-  status: designed
+  status: live
   params: [project_id, media_id, locator, connection_name]
   skill: genvid-media-registration
+
+# approve_media sets a generated media's selection_status for production use:
+# 'selected' to approve, 'discard' to reject, 'pending' to reset to undecided
+# (#2195). destructive because it overwrites the previous selection; each of the
+# three values stays reachable by a later call, so a rejection is not terminal.
+# This is the boundary's selection surface. It mints no approval id — the human
+# decision to allow the call is captured by your MCP client's own prompt, and the
+# resulting media row UPDATE is what lands in entity_events.
+- name: approve_media
+  classification: destructive
+  status: live
+  params: [project_id, media_id, selection_status]
+
+# export_provenance_report reads a production's audit trail (#2212): what was
+# generated, by which model, at which attestation tier, with what approval chain,
+# residency, and cost, tied to the signed C2PA manifests. Returns inline JSON
+# (default) or Markdown. read_only — it reads the record, it does not add to it.
+- name: export_provenance_report
+  classification: read_only
+  status: live
+  params: [project_id, format]
 
 - name: production_read
   classification: read_only
   status: live
-  params: [method, project_id, resource_type, resource_id, assigned_to]
+  params: [method, project_id, resource_type, resource_id, assigned_to, task_type, generation_type, model_id]
   skill: genvid-agent-generation
 
+# production_write is registered DESTRUCTIVE, not additive: its update methods
+# overwrite existing project and task state (workflow_status, assignment, priority,
+# the project's creative defaults), so your MCP client prompts before it runs. A
+# task's workflow_status transitions are recorded in the review history that
+# review_read returns, not in entity_events.
 - name: production_write
-  classification: additive
+  classification: destructive
   status: live
   params: [method, project_id, resource_type, resource_id, task_type, assigned_to_email, workflow_status, priority]
   skill: genvid-agent-generation
@@ -116,17 +176,16 @@
 # review_read / review_write are the boundary feedback surface (#2423): reading
 # review transitions/comments/auto-demotion provenance, and writing decision-events
 # (transcribed rulings, automated pipeline findings, iteration-chain summaries).
-# status: designed until this PR deploys to the prod boundary (same reasoning as
-# finalize_media_registration above) — flip to live in the post-deploy follow-up.
+# A review_write row lands in decision_event, not entity_events.
 - name: review_read
   classification: read_only
-  status: designed
+  status: live
   params: [method, resource_type, resource_id, task_type, page, page_size]
   skill: genvid-agent-generation
 
 - name: review_write
   classification: additive
-  status: designed
+  status: live
   params: [method, project_id, media_id, assignment_id, note, critique_tags, scope_target, dimension, severity, chain_id]
   skill: genvid-agent-generation
 
@@ -139,13 +198,39 @@
 - name: screenplay_write
   classification: destructive
   status: live
-  params: [method, project_id, content]
+  params: [method, project_id, content, message]
   skill: genvid-screenplay-breakdown
 
 # breakdown_assets / breakdown_storyboard / sync_assets_with_screenplay were retired
 # with the in-house composition backend (#1171, contract 0.3.0). Composition inference
 # now runs in the customer's BYOK agent via the governed write tools (scenes_write /
 # assets_write / shots_write / storyboard_write).
+- name: assets_read
+  classification: read_only
+  status: live
+  params: [method, project_id, asset_id, asset_type, render_type, budget_preference, shot_complexity, max_results]
+  skill: genvid-agent-generation
+
+# assets_write authors the cast, location, prop, and costume assets a screenplay
+# implies. method='create_batch' writes many in one call and is the one to use for a
+# breakdown; single 'create' calls are rate-limited. destructive because 'update'
+# overwrites an existing asset's name or description.
+- name: assets_write
+  classification: destructive
+  status: live
+  params: [method, project_id, asset_id, name, asset_type, description, assets]
+  skill: genvid-screenplay-breakdown
+
+# locations_write covers location state, and every method mutates: 'rederive'
+# re-runs extraction to link a scene to a location, 'update' reassigns a scene to an
+# existing location asset, 'canonicalize' merges cross-scene observations into a
+# location's canonical description. There is no locations_read — a location is an
+# asset, so reads go through assets_read and scenes_read.
+- name: locations_write
+  classification: destructive
+  status: live
+  params: [method, project_id, scene_id, location_id]
+
 - name: scenes_read
   classification: read_only
   status: live
@@ -163,13 +248,13 @@
 - name: shots_read
   classification: read_only
   status: live
-  params: [method, project_id, shot_id]
+  params: [method, project_id, shot_id, limit, cursor, detail]
   skill: genvid-scene-shot-design
 
 - name: shots_write
   classification: destructive
   status: live
-  params: [method, project_id, shot_id]
+  params: [method, project_id, shot_id, prompt, description, shot_size, camera_angle, camera_movement, shot_framing, transition]
   skill: genvid-scene-shot-design
 
 # storyboard_write is agent-authored composition (#1821, #1667). Per-method risk:
@@ -182,8 +267,21 @@
   params: [method, project_id, scenes, scene_id, beat, shots]
   skill: genvid-scene-shot-design
 
+# get_storyboard reads the current storyboard any time, not only right after a
+# write: the ordered shot list with diff/change metadata, approved scenes, and the
+# deterministic lints. Two kinds arrive in one array. Coverage/continuity
+# (MASCELLI_SIZE_ANGLE, BEAT_NO_COVERAGE) are always advisory. Script divergence
+# (DIVERGED_FROM_SCRIPT) is advisory when a cited screenplay block still resolves
+# but has changed, and severity "blocking" when a cited block no longer exists —
+# a blocking one is enforced server-side at storyboard approval (#2141), so it
+# refuses the approve rather than only warning. Reading is never blocked.
+- name: get_storyboard
+  classification: read_only
+  status: live
+  params: [project_id]
+  skill: genvid-scene-shot-design
+
 # generate_first_frames is intentionally NOT listed: it is platform/UI-side only
 # (in-graph agent + REST UI) and withheld from the remote MCP transport, so external
 # agents cannot call it. They compose first frames bring-your-own-model
 # (media_read -> own provider -> ingest_generated_media). See ADR-019, #1723.
-
