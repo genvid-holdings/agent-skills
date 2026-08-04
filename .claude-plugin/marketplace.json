@@ -10,8 +10,8 @@
     {
       "name": "genvid-skills",
       "source": "./",
-      "description": "Genvid reference skill pack — teaches any MCP-capable agent to drive the Genvid governed boundary.",
-      "version": "0.5.6"
+      "description": "Genvid reference skill pack: teaches any agent that loads Agent Skills to drive the Genvid governed boundary.",
+      "version": "0.6.0"
     }
   ]
 }

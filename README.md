@@ -2,7 +2,7 @@
 
 ## What this is
 
-This is the Genvid reference skill pack: a runtime-agnostic [Agent Skills](https://agentskills.io) (`SKILL.md`) pack that teaches any MCP-capable agent to drive the Genvid governed boundary out of the box.
+This is the Genvid reference skill pack: a runtime-agnostic [Agent Skills](https://agentskills.io) (`SKILL.md`) pack that teaches any agent that loads Agent Skills to drive the Genvid governed boundary out of the box.
 
 The pack carries no tenant data. Each skill describes how to call the Genvid boundary — orienting the agent, connecting to generators, generating with provenance, gating destructive operations, propagating changes, and driving the production workflow from screenplay through storyboard. The pack version is matched to the boundary via `boundary_compat` in `pack.json`; see Compatibility below.
 
