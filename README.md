@@ -122,11 +122,11 @@ Fork the public repo, add your own skills alongside the reference ones, and fill
 
 ## Compatibility
 
-The `version` field in `pack.json` is matched to a boundary release via `boundary_compat`. At runtime, agents can check the `boundary_contract_version` field exposed over MCP to confirm the pack and boundary are compatible before making calls.
+The `version` field in `pack.json` is matched to a boundary release via `boundary_compat`. The boundary reports its own contract version as `serverInfo.version` in the MCP `initialize` handshake, so an agent can read it at runtime and confirm the pack and the boundary are compatible before making calls.
 
 ```json
 {
-  "boundary_compat": ">=0.2.0 <0.3.0"
+  "boundary_compat": ">=0.5.0 <0.6.0"
 }
 ```
 
@@ -134,4 +134,4 @@ When the boundary ships a breaking change the minor version increments, `boundar
 
 Every version bump to `pack.json` must be mirrored in `.claude-plugin/marketplace.json`'s self-referencing plugin entry (`source: "./"`): `scripts/validate_pack.py` enforces this in CI, but if you fork the pack and drop that check, know that a stale marketplace version makes `claude plugin update` silently report "already at the latest version".
 
-**Caveat:** the range above is narrowed to match the pack's own `0.2.0` version per this policy, but that match is not yet CI-verified against a live boundary. `get_boundary_contract()` and a `boundary_client` module don't exist on the boundary side yet, so Gate 2 in `scripts/smoke_test.py` still SKIPS instead of checking the real contract version (see the comment near that check). Treat the narrowed range as a documentation-correctness fix, not a verified compatibility claim, until that gate goes live.
+The range is checked against a real boundary, not just asserted here. `scripts/boundary_client.py` is a stdlib-only MCP client that reads the contract version off the `initialize` handshake and the tool surface off `tools/list`. Gate 2 in `scripts/smoke_test.py` loads `boundary_compat` from `pack.json` and, when `BOUNDARY_URL` points at a boundary, fails on a missing tool, a drifted parameter, or a contract version outside the declared range. With no boundary configured it reports `SKIPPED` and exits zero, which is neither a pass nor a failure: there is nothing to validate against.

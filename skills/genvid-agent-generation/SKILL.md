@@ -106,7 +106,7 @@ The bound first frame is signed and carries `input_certification` — `all_certi
 
 ## Generating a shot's video
 
-Video follows the same shape as a first frame, with two differences: you bind to the `shot_video` slot, and in Step 0 you claim the shot's **`video`** task, not `keyframe`. `ingest_generated_media(project_id=..., link_type="shot_video", shot_id=..., render_type=<T2V | I2V | KF2V | ...>, model_provider=..., model_name=..., prompt=..., params=..., source_url=<provider result url>, input_media_ids=[<the keyframe media_ids you conditioned on, if any>])`. Claim+start the `video` task for **each** shot before binding its video; when you render a scene's worth of shots, do it per shot in the same loop, never a batch that binds first and claims later (or never).
+Video follows the same shape as a first frame, with two differences: you bind to the `shot_video` slot, and in Step 0 you claim the shot's **`video`** task, not `keyframe`. `ingest_generated_media(project_id=..., link_type="shot_video", shot_id=..., render_type=<T2V | I2V | KF2V | ...>, model_provider=..., model_name=..., prompt=..., params=..., source_url=<provider result url>, input_media_ids=[<the keyframe media_ids you conditioned on, if any>])`. Claim+start the `video` task for **each** shot before binding its video; when you render a scene's worth of shots, do it per shot in the same loop, never a batch that binds first and claims later (or never). Like a first frame, **binding a `shot_video` also selects it** for the (single-cardinality) slot — no separate select step is needed before the shot's `video` task can go to review (this is slot selection, not certification; the video still awaits a human's approval in content review).
 
 ---
 
