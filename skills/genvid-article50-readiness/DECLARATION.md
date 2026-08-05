@@ -51,9 +51,9 @@ about the material, and when.
 
 | Field | Meaning |
 | --- | --- |
-| `title` | Free text. Carried into the report so a report can be identified later. |
-| `operator` | The legal entity. Article 50 assigns duties to a provider and to a deployer; naming the entity is what lets anyone work out which one you are. |
-| `role` | `provider`, `deployer`, or `both`, and nothing else — see below. Article 50(2) binds the provider of the generating system; 50(4) binds the deployer of a system producing a deep fake. If you generated with someone else's model and published the result, you are typically the deployer, but that is a determination for counsel, not for this file. |
+| `title` | Free text. Carried verbatim into the JSON report's `scope.production.title` and into the heading of the gap list, so a report handed on later identifies itself by something other than the absolute filesystem path it was scanned from. Blank or whitespace-only reads as absent, the same as omitting the key — no placeholder is written in its place. |
+| `operator` | The legal entity. Article 50 assigns duties to a provider and to a deployer; naming the entity is what lets anyone work out which one you are. Carried verbatim into `scope.production.operator` and the gap list heading, the same as `title`. |
+| `role` | `provider`, `deployer`, or `both`, and nothing else — see below. Article 50(2) binds the provider of the generating system; 50(4) binds the deployer of a system producing a deep fake. If you generated with someone else's model and published the result, you are typically the deployer, but that is a determination for counsel, not for this file. Carried verbatim into `scope.production.role`, whatever was written — including a value outside the vocabulary below, which `role-unrecognized` judges separately. Not shown in the gap list heading. |
 | `artistic_work` | `true` where the work is evidently artistic, creative, satirical or fictional. Under 50(4) that narrows the disclosure duty to a form that does not hamper the work's display. It does not remove it. Declared here it covers every asset; an asset entry (or `defaults`) overrides it for that asset. |
 | `public_interest_text` | `true` if the production publishes AI-generated text to inform the public on matters of public interest. |
 | `editorial_responsibility` | Who held editorial responsibility for that text, if anyone. Relevant only when `public_interest_text` is `true`, and it is one of two limbs — see below. |
@@ -151,6 +151,21 @@ accepted as written. What it does **not** do is change the scan: every Article
 50(2) and 50(4) check in this tool runs the same way whatever `role` says. The
 field is recorded for the person reading the declaration and the duties are
 assigned by the Regulation, not by this file.
+
+### `title`, `operator` and `role` identify the report, they do not attest to anything
+
+These three reach the JSON report's `scope.production` block, and `title` and
+`operator` reach the gap list's heading, exactly as written — trimmed, and
+read as absent when blank or not a string, the same rule applied everywhere
+else in this file. This is a **declaration**, not a finding: nothing here is
+validated, the same convention the per-asset `declared` block already follows
+for `model`, `disclosure` and the rest. Presenting an operator-authored string
+back to the operator asserts nothing that was not already asserted by the
+declaration that carries it.
+
+`role` is carried whatever was written, including a value the vocabulary above
+does not recognize — this block is not where that gets judged. It also does
+not appear in the gap list heading; only `title` and `operator` do.
 
 ## `assets`
 

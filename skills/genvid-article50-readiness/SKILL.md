@@ -248,6 +248,17 @@ different asset). Such a record never softens a finding. The asset is reported a
 unmarked, exactly as if the record were absent, and the record is kept only so a
 person can see what was there.
 
+### Identifying a handed-on report
+
+Every report carries `scope.production`: `title`, `operator` and `role`,
+copied verbatim from the declaration's `production` block (`DECLARATION.md`
+has the field-by-field detail). `title` and `operator` also open the gap
+list's heading, so a report someone hands you months later names itself
+rather than only the absolute filesystem path it was scanned from. Neither
+field is validated — same convention as the per-asset `declared` block that
+already carries `model` and `disclosure` verbatim — and a blank or non-string
+value renders as `null`, never as an invented placeholder.
+
 ## Reading the gap list
 
 Gaps carry a stable `id`, a severity, the Article 50 paragraph they bear on, and

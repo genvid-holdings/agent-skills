@@ -2501,6 +2501,21 @@ def scan(root: Path, declaration_path=None, max_bytes=DEFAULT_MAX_BYTES, include
         },
     }
 
+    # Free text an operator wrote about the production, not a finding: carried
+    # verbatim, never validated, the same convention as the per-asset `declared`
+    # block below. `_text` is the same blank/non-string-as-absent rule #2685
+    # applied to `operator` and `role` as gap inputs -- applied here so a blank
+    # title reaches the report as `null`, never as a space or an invented name.
+    # `role` is carried whatever was written, including a value outside its
+    # vocabulary: `role-unrecognized` in production_gaps is what judges it, and
+    # this block is not that judgment.
+    production = (declaration.get("production") or {}) if declaration else {}
+    production_identity = {
+        "title": _text(production.get("title")) or None,
+        "operator": _text(production.get("operator")) or None,
+        "role": _text(production.get("role")) or None,
+    }
+
     return {
         "schema": REPORT_SCHEMA,
         "tool": {"name": TOOL_NAME, "version": TOOL_VERSION, "network_calls": 0, "account_required": False},
@@ -2509,6 +2524,7 @@ def scan(root: Path, declaration_path=None, max_bytes=DEFAULT_MAX_BYTES, include
             "root": str(root),
             "declaration": decl_path.name if (decl_path and not decl_error) else None,
             "declaration_error": decl_error,
+            "production": production_identity,
             "disclosure_files": disclosure_files,
             "regulation": "Regulation (EU) 2024/1689, Article 50",
             "applies_from": ARTICLE_APPLIES_FROM,
@@ -2544,8 +2560,19 @@ def scan(root: Path, declaration_path=None, max_bytes=DEFAULT_MAX_BYTES, include
 
 def render_gap_list(report) -> str:
     counts = report["counts"]
+    # A handed-on report is otherwise identified only by `Scope:`, an absolute
+    # filesystem path meaningful to nobody who did not run the scan (#2687).
+    # title and operator are declared, not verified -- see scope.production --
+    # so they are named in the heading rather than asserted as fact. Either or
+    # both may be absent; nothing is invented to fill the gap.
+    production = report["scope"].get("production") or {}
+    title, operator = production.get("title"), production.get("operator")
+    identity = ([title] if title else []) + (["operator: %s" % operator] if operator else [])
+    heading = "# Article 50 gap list"
+    if identity:
+        heading += ": %s" % " -- ".join(identity)
     lines = [
-        "# Article 50 gap list",
+        heading,
         "",
         "Scope: `%s`" % report["scope"]["root"],
         "Generated: %s by %s %s" % (report["generated_at"], report["tool"]["name"], report["tool"]["version"]),
