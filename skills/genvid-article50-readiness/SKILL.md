@@ -47,7 +47,10 @@ conclusion it reaches:
   Presence is established by confirming the C2PA identifier where the container
   specification puts it, never by finding marker text somewhere in the file, so
   prose that names the C2PA boxes and pixel data that happens to contain the
-  bytes both read as unmarked. Where the container cannot be walked — a format
+  bytes both read as unmarked. In a JSON sidecar the same rule applies to key
+  names: `assertions` is ordinary English, so a QA checklist that has one is a
+  checklist, and the sidecar counts only where the value under the key is the
+  structure C2PA defines. Where the container cannot be walked — a format
   this reader does not parse, a manifest below the top level, or a file so large
   only its two ends were read — the report says the container structure was not
   confirmed rather than presenting the weaker finding as the stronger one.
@@ -63,11 +66,27 @@ conclusion it reaches:
   standard. The tool reads what the industry actually writes; do not read its
   output as a conformance check against a named specification.
 
-### Two things practitioners get wrong
+### What practitioners get wrong
 
 **Article 50(2) is two obligations, not one.** Output must be marked in a
 machine-readable format *and* be detectable as artificially generated or
 manipulated. Marking with no available means of detection does not discharge it.
+
+**Article 50(2) also carries its own exception, and post-production meets it
+constantly.** The paragraph's third sentence lifts the obligation "to the extent
+that the AI systems perform an assistive function for standard editing or do not
+substantially alter the input data provided by the deployer or the semantics
+thereof, or where authorised by law to detect, prevent, investigate or prosecute
+criminal offences." AI-assisted denoise, upscale, cleanup and plate repair are
+the first part of that: they alter the image without altering what it depicts.
+Declare it as `assistive_editing` on the asset or the production and the marking
+duty is not asserted over that asset — it moves to `obligations_disapplied` with
+the basis named, and the marking gaps do not fire. It is recorded and never
+verified, the same as `watermark`, and it lifts nothing else: a declared deep
+fake still engages 50(4), and a declaration contradicting the file's own
+metadata is still a finding. The exception's law-enforcement clause is **not
+modelled** — there is no field for it and the printed limits say so.
+`DECLARATION.md` has the exact scoring.
 
 **A machine-readable marking does not satisfy Article 50(4).** The deep-fake
 disclosure duty is a separate axis, because such markings are not clear and
@@ -101,11 +120,17 @@ python3 article50_scan.py /path/to/production --json - --gaps /dev/null | jq '.c
 Exit status is `0` when every file was read and no gaps were recorded, `1` when
 at least one gap was, and `2` when the scan could not run or could not finish —
 a bad path, an unreadable declaration, a read budget below 1, or artifacts that
-could not be delivered. That last case covers stdout as well as files: a gap
-list piped into a consumer that exits early is a report that never arrived, so
-it exits `2` rather than `1`, on every output path including the bare command
-above. That makes it usable as a delivery gate in CI; add `--exit-zero` when you
-want the report without failing the build.
+could not be delivered. That last case covers stdout as well as files: a write
+that fails, a broken pipe included, exits `2` rather than `1`, on every output
+path including the bare command above. That makes it usable as a delivery gate
+in CI; add `--exit-zero` when you want the report without failing the build.
+
+What a `2` cannot tell you is that a consumer read the report. A gap list small
+enough for the kernel's pipe buffer is accepted in full before a reader that
+exits early closes its end, so the write succeeds and the exit code is the
+ordinary `0` or `1`; nothing afterwards reports that the bytes went unread. If
+the gate depends on the report reaching something, write it to a file with `-o`
+or `--gaps PATH` and have the consumer open that.
 
 Unless you pass `--exit-zero`, `0` therefore means *examined and clean*; it does
 not mean *unexamined*. A file the scan finds but cannot open — permissions, a
@@ -122,6 +147,17 @@ extension that nothing declares and no flag asks for — a file is out of scope
 whether or not it can be read, exactly as a readable one is; a stale scratch
 symlink nobody declared is not reported, because the scan never claimed to cover
 it. Declare the path or pass `--include-other` if you want it accounted for.
+
+One carve-out sits ahead of all three, and it is a directory rule rather than a
+file rule. The scan never descends into `.git`, `.svn`, `.venv`, `venv`,
+`node_modules`, `__pycache__` or `.DS_Store`, wherever in the tree they appear:
+they hold tooling, not deliverables, and nothing inside one is scanned, counted
+or reported — not even under `--include-other`. One thing does pierce it: a path
+your declaration names. That path is reported as a `declared-asset-not-found`
+gap naming the directory that withheld it, because a duty you wrote down must
+never disappear on a directory name. The gap says the file was not examined
+rather than that it is missing, since it is neither missing nor unreadable —
+move the asset out of that directory, or scan that directory as its own root.
 
 A **directory** the scan cannot list is always reported, in or out of any
 extension scope, because it hides an unknown number of files rather than one:
@@ -146,9 +182,9 @@ rather than run as a scan that reads nothing.
 | Content credentials | JPEG APP11 JUMBF, PNG `caBX` chunk, WebP `C2PA` chunk, BMFF top-level `uuid` box, `.c2pa` sidecars — each confirmed by the C2PA type UUID, not by the container tag alone | A manifest is present: machine-readable marking |
 | Remote manifests | `dcterms:provenance` in the XMP packet, pointing at a manifest stored away from the asset | A downstream reader can resolve a manifest; this tool does not, because it makes no network call |
 | IPTC digital source type | The value of `Iptc4xmpExt:DigitalSourceType` in the asset's embedded XMP packet, in any of its serializations | The file states its own origin: generated, composited, or captured |
-| Generator name | XMP `CreatorTool` / `Software` / `softwareAgent` / `Producer`, EXIF Software, PNG `Software` / `Source` chunks, and the value of the PNG `parameters` / `prompt` / `workflow` chunks whether or not it parses as a generation record | Indicates a model produced it; a hint left by a tool, not a record anyone stands behind |
-| Generation parameters | A recognizable generation record — an AUTOMATIC1111 block (several `Steps` / `Sampler` / `CFG scale` / `Seed` / `Model hash` pairs) or a ComfyUI node graph — wherever it is written: a PNG text chunk, the XMP packet, a JPEG `COM` segment, or EXIF `UserComment` for JPEG and WebP. Plus the vendor-namespaced PNG keys `sd-metadata` and `invokeai_metadata`, trusted on their name | A generation pipeline wrote its settings into the file — an origin signal that does not depend on recognizing the model |
-| Sidecars | `<asset>.c2pa` and `<asset>.<ext>.c2pa`, opened and required to hold a manifest store; `<asset>.<ext>.json` parsed as JSON for a manifest definition or a digital source type | Marking that travels beside the file rather than inside it |
+| Generator name | XMP `CreatorTool` / `Software` / `softwareAgent` / `Producer`, EXIF Software — read from a JPEG `APP1` segment, a WebP `EXIF` chunk and a PNG `eXIf` chunk alike — PNG `Software` / `Source` chunks, and the value of the PNG `parameters` / `prompt` / `workflow` chunks whether or not it parses as a generation record; in MP4/MOV, the QuickTime metadata atoms `©swr`, `©too` and `©enc`, and any reverse-DNS key (`com.apple.quicktime.software` and its kind) whose last component is `software`, `encoder`, `creationsoftware` or `creatortool`, case ignored | Indicates a model produced it; a hint left by a tool, not a record anyone stands behind |
+| Generation parameters | A recognizable generation record — an AUTOMATIC1111 block (several `Steps` / `Sampler` / `CFG scale` / `Seed` / `Model hash` pairs) or a ComfyUI node graph — wherever it is written: any PNG text chunk (`tEXt`, `iTXt` or `zTXt`, compressed or not), the XMP packet, a JPEG `COM` segment, or EXIF `UserComment` for JPEG, WebP and PNG. Plus the vendor-namespaced PNG keys `sd-metadata` and `invokeai_metadata`, trusted on their name | A generation pipeline wrote its settings into the file — an origin signal that does not depend on recognizing the model |
+| Sidecars | `<asset>.c2pa` and `<asset>.<ext>.c2pa`, opened and required to hold a manifest store; `<asset>.<ext>.json` parsed as JSON and required to hold a C2PA structure — a `claim_generator` name, `claim_generator_info` objects, namespaced assertion labels, or a manifest store — or a digital source type | Marking that travels beside the file rather than inside it |
 | Operator declaration | `article50.json` in the scanned directory | What a human states about the material; see `DECLARATION.md` |
 
 Three rules keep these readings anchored to what the file actually asserts.
@@ -165,8 +201,13 @@ third because anchoring alone would have cost real detections:
 - **Generator names count only in fields that name the producing software.** A
   photographer called Sora, a gemstone called topaz and a spacecraft called
   Gemini are subject matter, not provenance, so captions, keywords, titles,
-  instructions and the EXIF Artist are not searched. A fingerprint also has to
-  be a whole token: `pikachu` is not the generator `Pika`.
+  instructions and the EXIF Artist are not searched. That holds in a video
+  container as it does in a still: an MP4 or MOV is read through the metadata
+  atoms listed above, not by searching its metadata boxes whole, so a `©cmt`
+  comment naming the photographer reads as the comment it is. The cost is
+  stated rather than hidden — a pipeline that writes its name only into free
+  text is not detected, in any format. A fingerprint also has to be a whole
+  token: `pikachu` is not the generator `Pika`.
 - **Generation parameters are found by shape, and how strict the shape has to
   be depends on the field.** A parameter block counts wherever it sits, which
   is what keeps AUTOMATIC1111's output detected after the narrowing above, and
@@ -259,6 +300,16 @@ field is validated — same convention as the per-asset `declared` block that
 already carries `model` and `disclosure` verbatim — and a blank or non-string
 value renders as `null`, never as an invented placeholder.
 
+The JSON report carries all three exactly as written. The gap list is Markdown
+a person reads and a renderer parses, so the heading shows `title` and
+`operator` as code spans with control characters removed: a declared value
+containing a newline would otherwise close the heading and open a section of
+the operator's own composition — a forged `## Gaps` block reading "No gaps
+recorded" — and an escape sequence would rewrite the terminal of anyone who
+`cat`-ed the report. The same neutralising applies to every value spliced into
+the gap list, asset paths and the `role` quoted back by `role-unrecognized`
+included. It changes what a renderer obeys, not what the report records.
+
 ## Reading the gap list
 
 Gaps carry a stable `id`, a severity, the Article 50 paragraph they bear on, and
@@ -270,7 +321,9 @@ a remediation. The ones that matter most in practice:
   text says which: no marking at all, which includes anything detection examined
   and established was not a marking; and a marking whose only origin statement
   asserts a non-model origin, which is worse than none because it misleads every
-  reader downstream.
+  reader downstream. Not raised where the asset (or the production) declares
+  `assistive_editing`: the paragraph's own third sentence lifts the duty there,
+  and the report records the disapplication rather than the gap.
 - `marking-origin-unreadable`. A manifest store is genuinely there — embedded or
   in a sidecar — but this tool locates manifests without parsing them, so nothing
   it can see says the asset was generated. Medium, not high, because the claim
@@ -278,14 +331,19 @@ a remediation. The ones that matter most in practice:
   unevidenced rather than unmet. An empty manifest chunk is not this case; it
   names a store that is not there, and reports as unmarked.
   Validate the manifest, or write the IPTC digital source type into the XMP as
-  well so a plain metadata reader can see the origin too.
+  well so a plain metadata reader can see the origin too. Like the gap above, it
+  is not raised where `assistive_editing` is declared.
 - `declaration-field-malformed`. A declaration field Article 50 turns on holds
   something that is not a boolean — `"true"` rather than `true` is the common
   one. Raised at both levels: on the asset for a per-entry field, and on the
-  directory for `production.artistic_work`, `production.public_interest_text` or
-  `production.human_review`. The value is reported, never coerced: guessing what
-  the operator meant would put words in their mouth, and the coercion that looks
-  obvious runs backwards, because `bool("false")` is `true`.
+  directory for `production.artistic_work`, `production.public_interest_text`,
+  `production.human_review` or `production.assistive_editing`. An entry naming a
+  path the scan never found is typed the same way and raises it on that path,
+  alongside `declared-asset-not-found`: the entry still counts toward the
+  production-level checks, so a value that resolves nothing has to say so. The value is
+  reported, never coerced: guessing what the operator meant would put words in
+  their mouth, and the coercion that looks obvious runs backwards, because
+  `bool("false")` is `true`.
 - `role-unrecognized`. `production.role` holds something outside the vocabulary
   `DECLARATION.md` defines — provider, deployer, both. Same severity as stating
   no role at all, because it settles as little about which paragraphs bind. Not
@@ -304,7 +362,8 @@ a remediation. The ones that matter most in practice:
   can be disseminated online. Metadata alone is the layer that a transcode
   strips. This tool cannot detect a watermark, so it reports only that no
   evidence of one reached it; record yours in the declaration's `watermark`
-  field and the gap closes.
+  field and the gap closes. It rides on the same 50(2) duty as the two above, so
+  a declared `assistive_editing` lifts it too.
 - `origin-undetermined`. Nothing states whether the file was generated or
   captured, and no declaration entry covers it. Usually the largest bucket on a
   first run, and the one that has to shrink before the rest of the report means
@@ -322,11 +381,24 @@ a remediation. The ones that matter most in practice:
 - `deep-fake-disclosure-absent`. Declared a deep fake with no disclosure
   wording recorded. Where the work is evidently artistic, creative, satirical or
   fictional, Article 50(4) narrows the duty to a form that does not hamper the
-  work's display. It does not remove it.
+  work's display. It does not remove it. A declared `assistive_editing` does not
+  reach this one either: that exception belongs to 50(2).
+- `production-disclosure-statement-absent`. The production declares deep fakes
+  and the disclosure wording is missing for at least one of them. Disclosure is
+  the duty Article 50(4) writes, and the scan reads it at both levels the
+  declaration writes it: `production.disclosure_statement` for the whole
+  production, or a `disclosure` on every declared deep fake — the per-shot
+  burned-in card discharges it exactly as the production-wide statement does.
+  The finding says how many of the declared deep fakes carry no wording. Medium,
+  and it counts declared deep fakes that never reached the disk too, since a
+  missing file must not clear a duty by being absent.
 - `declared-asset-not-found`. The declaration names a path the scan never read.
-  The gap says which of three things happened: no file is there, a file is there
-  but its extension is not one the scan assesses, or — the common one — the file
-  was delivered under different capitals (`SH040_Likeness.PNG` against a declared
+  The gap says which of four things happened: no file is there, a file is there
+  but its extension is not one the scan assesses, the path sits under one of the
+  skipped directories above (in which case the gap names that directory, since
+  the file is present and readable and "no file was found" would send you to the
+  wrong repair), or — the common one — the file was delivered under different
+  capitals (`SH040_Likeness.PNG` against a declared
   `sh040_likeness.png`), in which case the gap names the delivered file so the
   fix is one line. Keys are matched exactly, case included, and the scan will not
   guess: on a case-sensitive filesystem two files can differ only in capitals,
@@ -353,9 +425,11 @@ a remediation. The ones that matter most in practice:
   cannot be read, which is a different repair from a path that names nothing.
 - `public-interest-text-undisclosed`. The production publishes AI-generated text
   on matters of public interest with no disclosure recorded. Disclosure is the
-  duty here; the exception that lifts it has two limbs, human review *and* a
-  person holding editorial responsibility, so naming an editorial owner alone
-  does not close this. `DECLARATION.md` has the exact rule.
+  duty here, and it is read at both levels the declaration writes it:
+  `production.disclosure_statement` for the publication, or a `disclosure` on
+  every declared text asset. The exception that lifts it has two limbs, human
+  review *and* a person holding editorial responsibility, so naming an editorial
+  owner alone does not close this. `DECLARATION.md` has the exact rule.
 
 ## The workflow this is meant to support
 
