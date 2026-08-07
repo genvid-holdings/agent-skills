@@ -11,7 +11,7 @@
       "name": "genvid-skills",
       "source": "./",
       "description": "Genvid reference skill pack: teaches any agent that loads Agent Skills to drive the Genvid governed boundary.",
-      "version": "0.7.1"
+      "version": "0.7.7"
     }
   ]
 }

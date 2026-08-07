@@ -42,6 +42,11 @@ about the material, and when.
     },
     "shots/sh010_plate_exterior.jpg": {
       "ai_generated": false
+    },
+    "shots/sh050_denoise.exr": {
+      "ai_generated": true,
+      "model": "example-denoiser-2.1",
+      "assistive_editing": true
     }
   }
 }
@@ -51,14 +56,59 @@ about the material, and when.
 
 | Field | Meaning |
 | --- | --- |
-| `title` | Free text. Carried verbatim into the JSON report's `scope.production.title` and into the heading of the gap list, so a report handed on later identifies itself by something other than the absolute filesystem path it was scanned from. Blank or whitespace-only reads as absent, the same as omitting the key — no placeholder is written in its place. |
+| `title` | Free text. Carried verbatim into the JSON report's `scope.production.title`, and into the heading of the gap list as a code span with control characters removed (see [What a rendered value keeps](#what-a-rendered-value-keeps)), so a report handed on later identifies itself by something other than the absolute filesystem path it was scanned from. Blank or whitespace-only reads as absent, the same as omitting the key — no placeholder is written in its place. |
 | `operator` | The legal entity. Article 50 assigns duties to a provider and to a deployer; naming the entity is what lets anyone work out which one you are. Carried verbatim into `scope.production.operator` and the gap list heading, the same as `title`. |
 | `role` | `provider`, `deployer`, or `both`, and nothing else — see below. Article 50(2) binds the provider of the generating system; 50(4) binds the deployer of a system producing a deep fake. If you generated with someone else's model and published the result, you are typically the deployer, but that is a determination for counsel, not for this file. Carried verbatim into `scope.production.role`, whatever was written — including a value outside the vocabulary below, which `role-unrecognized` judges separately. Not shown in the gap list heading. |
 | `artistic_work` | `true` where the work is evidently artistic, creative, satirical or fictional. Under 50(4) that narrows the disclosure duty to a form that does not hamper the work's display. It does not remove it. Declared here it covers every asset; an asset entry (or `defaults`) overrides it for that asset. |
+| `assistive_editing` | `true` where Article 50(2)'s own exception applies to the whole production — a restoration, cleanup or grade pass whose AI is assistive standard editing. Declared here it covers every asset; an asset entry (or `defaults`) overrides it. See [How `assistive_editing` is scored](#how-assistive_editing-is-scored). |
 | `public_interest_text` | `true` if the production publishes AI-generated text to inform the public on matters of public interest. |
 | `editorial_responsibility` | Who held editorial responsibility for that text, if anyone. Relevant only when `public_interest_text` is `true`, and it is one of two limbs — see below. |
 | `human_review` | `true` where a person reviewed the published text before it went out. The production-level counterpart of the per-asset field; either one evidences review. |
-| `disclosure_statement` | The wording a person is actually shown. Not a note to yourself: the words that appear on screen, in the credits, or in the player. |
+| `disclosure_statement` | The wording a person is actually shown. Not a note to yourself: the words that appear on screen, in the credits, or in the player. Covers the whole production; a per-asset `disclosure` on every declared deep fake discharges the same duty, so writing it here is a convenience, not the only place the scan looks. Neither present, with deep fakes declared, raises `production-disclosure-statement-absent`. |
+
+### How `assistive_editing` is scored
+
+Article 50(2) carries its own exception, in the paragraph's third sentence:
+
+> This obligation shall not apply to the extent that the AI systems perform an
+> assistive function for standard editing or do not substantially alter the
+> input data provided by the deployer or the semantics thereof, or where
+> authorised by law to detect, prevent, investigate or prosecute criminal
+> offences.
+
+`assistive_editing: true` is you stating that the first part reaches this
+material: AI-assisted denoise, upscale, cleanup, rotoscope assist, a plate
+repair — work that alters the image without altering what it depicts. It is
+the ordinary case in post, and declaring an asset `ai_generated: true` honestly
+should not put a marking duty on it that the Regulation does not.
+
+What the scan does with it:
+
+- The Article 50(2) **marking and detectability** obligation is not listed under
+  `obligations_engaged` for that asset. It is recorded under
+  `obligations_disapplied` instead, naming the sentence and saying the basis is
+  a declaration rather than a finding — a duty that vanishes without a word is
+  the same failure as one asserted where it does not apply.
+- The gaps enforcing that duty do not fire:
+  `machine-readable-marking-absent`, `marking-origin-unreadable`,
+  `second-marking-layer-unevidenced`.
+- **Nothing else is lifted.** Article 50(4) is a separate axis, so a declared
+  deep fake still engages the disclosure duty and still raises
+  `deep-fake-disclosure-absent`. So does a declaration that contradicts the
+  file's own metadata: a `digitalCapture` claim in the delivered bytes is a
+  defect in the material whatever duty applies.
+- It is read only where 50(2) would otherwise engage. On an asset the scan does
+  not read as generated or manipulated there is nothing to lift, and the field
+  changes nothing.
+- It is **never verified**, the same convention as `watermark`. Whether an edit
+  substantially alters the semantics of the input is a judgement about the
+  system and the work, not a fact in the bytes. The scan records your position
+  and stops asserting the duty over it; it does not confirm it.
+
+The exception's **third clause** — a system authorised by law to detect,
+prevent, investigate or prosecute criminal offences — is **not modelled**. There
+is no field for it, and a production relying on it reads this report as though
+the marking duty applied. The report's printed limits say so on every run.
 
 ### How `public_interest_text` is scored
 
@@ -67,6 +117,12 @@ follows that structure rather than inverting it:
 
 - A `disclosure_statement` clears it. Disclosing is the thing the paragraph asks
   for, so having disclosed is never itself a finding.
+- A `disclosure` written on **every** declared text asset clears it too — that
+  is the same wording, recorded per article instead of per publication, and the
+  deep-fake limb already reads both levels the same way. Every one, because
+  disclosing one article says nothing about the next; and a production that
+  declares `public_interest_text` with no text entry at all has evidenced
+  nothing, so an empty set does not clear it either.
 - Otherwise the duty lifts only on the statutory exception, which is
   **conjunctive**: the text underwent human review or editorial control, *and* a
   person holds editorial responsibility. Both limbs, not either. So
@@ -96,8 +152,14 @@ These fields are JSON booleans, and are checked **at both levels they appear**:
 
 | Level | Fields | Where the gap lands |
 | --- | --- | --- |
-| Asset entry (and `defaults`, which is merged into every entry) | `ai_generated`, `deep_fake`, `artistic_work`, `human_review` | on that asset |
-| `production` | `artistic_work`, `public_interest_text`, `human_review` | on the directory |
+| Asset entry (and `defaults`, which is merged into every entry) | `ai_generated`, `deep_fake`, `artistic_work`, `human_review`, `assistive_editing` | on that asset |
+| `production` | `artistic_work`, `public_interest_text`, `human_review`, `assistive_editing` | on the directory |
+
+Whether the file arrived changes nothing here. An entry naming a path the scan
+never found is typed the same way and raises the same gap on the same path, and
+the value it does not resolve is the value the production-level checks see. A
+declaration is a statement about the work, and a statement of the wrong type
+resolves nothing wherever the file it describes ended up.
 
 A value that is neither `true` nor `false` — `"true"` as a string, `1`, `"yes"` —
 raises `declaration-field-malformed` at high severity and does not resolve the
@@ -121,6 +183,12 @@ without it and raises the high-severity `declaration-unparsable` gap naming what
 is wrong with it. Where the declaration was named explicitly with `--declaration`,
 the scan refuses and exits `2` instead, because reading that file was part of the
 question it was asked.
+
+A file that is not valid UTF-8 takes the same path. The declaration is read as
+UTF-8, and one stray byte makes it as unreadable as a missing brace does —
+present, and unusable as a declaration — so it raises the same
+`declaration-unparsable` gap naming the byte and the offset, and the scan still
+runs against file metadata alone.
 
 ### Wording fields must contain wording
 
@@ -154,10 +222,10 @@ assigned by the Regulation, not by this file.
 
 ### `title`, `operator` and `role` identify the report, they do not attest to anything
 
-These three reach the JSON report's `scope.production` block, and `title` and
-`operator` reach the gap list's heading, exactly as written — trimmed, and
-read as absent when blank or not a string, the same rule applied everywhere
-else in this file. This is a **declaration**, not a finding: nothing here is
+These three reach the JSON report's `scope.production` block exactly as written
+— trimmed, and read as absent when blank or not a string, the same rule applied
+everywhere else in this file. `title` and `operator` reach the gap list's
+heading as well, under the rendering rule below. This is a **declaration**, not a finding: nothing here is
 validated, the same convention the per-asset `declared` block already follows
 for `model`, `disclosure` and the rest. Presenting an operator-authored string
 back to the operator asserts nothing that was not already asserted by the
@@ -166,6 +234,28 @@ declaration that carries it.
 `role` is carried whatever was written, including a value the vocabulary above
 does not recognize — this block is not where that gets judged. It also does
 not appear in the gap list heading; only `title` and `operator` do.
+
+### What a rendered value keeps
+
+The JSON report carries these fields character for character. The gap list is
+Markdown a person reads and a renderer parses, and every value that reaches it
+is neutralised first: control and format characters — line breaks, ANSI escape
+sequences, bidirectional overrides — are removed, and the operator-authored
+`title` and `operator` are shown as code spans.
+
+That is a rendering rule, not a rewrite of the record. It exists because
+`title`, `operator` and `role` are written by the same party whose claims the
+scan cross-checks against the bytes, and a value carrying a newline would
+otherwise end the heading and open a section of the operator's own composition
+— a forged `## Gaps` block reading "No gaps recorded", or an unclosed HTML
+comment that hides every real finding from a Markdown renderer — while an
+escape sequence would rewrite the terminal of anyone who `cat`-ed the report.
+The same neutralising is applied to asset paths and to the `role` that
+`role-unrecognized` quotes back, for the same reason.
+
+A value UTF-8 cannot encode at all — an unpaired surrogate, which JSON permits
+— is not papered over: the artifact cannot be written, and the scan exits `2`
+rather than reporting a gap list nobody received.
 
 ## `assets`
 
@@ -176,9 +266,10 @@ an object:
 | --- | --- |
 | `ai_generated` | `true`, `false`, or omitted. Omitted is not the same as `false`: the scan reports it as undetermined and raises a gap, because an obligation cannot be scoped or ruled out while the origin is unknown. |
 | `deep_fake` | `true` where the asset is generated or manipulated **image, audio or video** content resembling real people, objects, places or events, presented as authentic. Article 50(4)'s first subparagraph reaches those three modalities only, so declaring it on a text asset — or on anything else the scan does not read as image, audio or video — raises `deep-fake-declared-on-non-av-asset` instead of engaging the deep-fake duty. AI-generated text belongs under `production.public_interest_text`, whose duty and exception are different. |
+| `assistive_editing` | `true` where Article 50(2)'s own exception reaches this asset: the system performed an assistive function for standard editing, or did not substantially alter the input data or its semantics. Denoise, upscale and cleanup are the ordinary cases. Overrides a production-level declaration for this asset; scored in [How `assistive_editing` is scored](#how-assistive_editing-is-scored). Recorded, never verified. |
 | `model` | Model and version. This is what makes the declaration auditable a year later, when the pipeline has moved on. |
 | `human_review` | Whether a person reviewed the output before it went into the cut. For AI-generated text under `public_interest_text`, this is one of the two limbs of the exception that lifts the disclosure duty. |
-| `disclosure` | Per-asset disclosure wording, where it differs from the production-level statement. |
+| `disclosure` | Per-asset disclosure wording, where it differs from the production-level statement. Read wherever the production-level `disclosure_statement` is read: the deep-fake limb of Article 50(4), and — on a declared text asset — the public-interest limb scored above. Both those limbs read it per asset (`deep-fake-disclosure-absent`, and the asset's `human_readable_disclosure`) *and* across the production: written on **every** declared deep fake it clears `production-disclosure-statement-absent` exactly as a `disclosure_statement` does, and on every declared text asset it clears `public-interest-text-undisclosed` the same way. |
 | `watermark` | The imperceptible watermark carried by this asset, if any; name the method or tool. The code of practice expects two layers of machine-readable marking, signed metadata *and* a watermark, and this scan can read only the first. Recording it here is you asserting the second layer exists; the scan takes your word for it, marks it `declared` rather than verified, and closes the `second-marking-layer-unevidenced` gap. Leave it out if you are not sure. |
 
 `defaults` applies to every asset and is overridden per entry. Use it sparingly:
@@ -203,7 +294,11 @@ report so a person can resolve it.
 Nor does a declaration close an Article 50(2) marking gap. Declaring an asset
 AI-generated is what engages the paragraph; what discharges it is the delivered
 bytes carrying a marking that says so. See SKILL.md on what a marking has to
-assert to count.
+assert to count. The one thing a declaration can do here is invoke the
+paragraph's own exception — `assistive_editing`, scored above — and that is not
+the same move: it does not record the duty as met, it records the operator
+stating that the duty does not reach the asset, and the report says which of the
+two happened.
 
 Reconciliation runs in both directions. A key here that matches no file in the
 directory raises `declared-asset-not-found` and fails the scan, and its
@@ -220,6 +315,20 @@ and guessing which one was meant would attach a deep-fake duty to the wrong
 asset. Note this is the realistic form of the failure — the file was delivered,
 the declaration describes it, and nothing connects them, so the asset is scanned
 as though nobody declared anything about it.
+
+Unicode normalization is the one difference that is reconciled rather than
+reported. `café_shot.png` typed into this file is normally NFC, and the same
+name written to disk by a macOS pipeline is often NFD: one filename, two byte
+sequences, the same characters either way. Those are matched. Case is not, and
+the two are different questions — NFC and NFD are two spellings of one
+character, `A` and `a` are two characters.
+
+A key naming a path under a directory the scan never walks — `.git`, `.svn`,
+`.venv`, `venv`, `node_modules`, `__pycache__` or `.DS_Store`, wherever they
+appear — is also reported, and the gap names the directory rather than claiming
+the file is absent. It is not: it is there, readable, and was never looked at.
+Those want opposite repairs, so the wording keeps them apart. Move the asset out
+of that directory, scan that directory as its own root, or drop the entry.
 
 A declared asset that is present but could not be read is kept distinct from
 both of those outcomes. It was seen, so it is not `declared-asset-not-found`;
