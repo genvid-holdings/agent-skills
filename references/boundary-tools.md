@@ -17,6 +17,7 @@
 | `register_media` | additive | live | `project_id`, `link_type`, `shot_id`, `asset_id`, `filename`, `mime_type`, `proxy_filename`, `storage_class`, `connection_name` | genvid-media-registration |
 | `finalize_media_registration` | additive | live | `project_id`, `media_id`, `link_type`, `shot_id`, `asset_id`, `content_hash`, `fingerprint_iscc`, `fingerprint_iscc_content`, `filename`, `mime_type`, `size_bytes`, `duration_seconds`, `timecode`, `locator`, `locator_type`, `pre_signed_c2pa_manifest`, `input_media_ids`, `storage_class`, `connection_name` | genvid-media-registration |
 | `resolve_media` | read_only | live | `project_id`, `media_id` | genvid-agent-generation |
+| `check_conformance` | read_only | live | `project_id`, `asset_id`, `media_id` | genvid-agent-generation |
 | `verify_media` | additive | live | `project_id`, `media_id`, `content_hash`, `locator`, `locator_type` | genvid-media-registration |
 | `connect_media` | additive | live | `project_id`, `media_id`, `locator`, `connection_name` | genvid-media-registration |
 | `approve_media` | destructive | live | `project_id`, `media_id`, `selection_status` |  |
