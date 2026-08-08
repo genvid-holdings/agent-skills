@@ -107,6 +107,18 @@
   params: [project_id, media_id]
   skill: genvid-agent-generation
 
+# check_conformance (#2707) answers whether a 3D artifact satisfies what its
+# destination requires at the stage its asset link declares — triangle budgets,
+# watertightness, bone naming and hierarchy, influence caps, rest pose, coordinate
+# convention. Genvid measures the bytes it holds; the caller supplies no thresholds
+# and no measurements. Requires target/stage on the asset link (set them on
+# ingest_generated_media) and 3D model media Genvid holds. Nothing is written.
+- name: check_conformance
+  classification: read_only
+  status: live
+  params: [project_id, asset_id, media_id]
+  skill: genvid-agent-generation
+
 # verify_media is the sibling of register_media (#2023): register CREATES a
 # registered-tier registry entry from a proxy + claim; verify MAINTAINS one — the
 # customer's agent recomputes the original's SHA-256 locally and reports its
