@@ -71,7 +71,7 @@ The `@` prefix streams the file itself — full resolution, byte-for-byte, signe
 | Parameter | What to supply |
 |---|---|
 | `project_id` | The project the media belongs to |
-| `link_type` | The slot the media fills: a shot slot (`shot_firstframe` / `shot_keyframe` / `shot_lastframe` / `shot_video`) or an asset image slot (`cast_member_image` / `location_image` / `prop_image` / ...) |
+| `link_type` | The slot the media fills: a shot slot (`shot_firstframe` / `shot_keyframe` / `shot_lastframe` / `shot_video`) or an asset slot matching **both** the asset's type and the media's kind — `cast_member_image` for a character still, `location_video` for location footage, `prop_model` for a prop mesh. The prefix must agree with the asset's type and the suffix with the file's media kind; a video filed under `..._image` is rejected. |
 | `shot_id` *or* `asset_id` | The anchor — provide exactly one |
 | `source_url` *or* `image_base64` | The result — the provider's hosted URL (preferred), or the base64 bytes for a genuinely tiny payload. Exactly one. *Generated to a local file instead? Use the `genvid` CLI's `rendered_output: @<path>` above, not base64.* |
 | `filename` | A filename whose extension sets the content type (e.g. `flux.png`) |

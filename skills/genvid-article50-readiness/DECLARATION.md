@@ -56,10 +56,10 @@ about the material, and when.
 
 | Field | Meaning |
 | --- | --- |
-| `title` | Free text. Carried verbatim into the JSON report's `scope.production.title`, and into the heading of the gap list as a code span with control characters removed (see [What a rendered value keeps](#what-a-rendered-value-keeps)), so a report handed on later identifies itself by something other than the absolute filesystem path it was scanned from. Blank or whitespace-only reads as absent, the same as omitting the key — no placeholder is written in its place. |
-| `operator` | The legal entity. Article 50 assigns duties to a provider and to a deployer; naming the entity is what lets anyone work out which one you are. Carried verbatim into `scope.production.operator` and the gap list heading, the same as `title`. |
-| `role` | `provider`, `deployer`, or `both`, and nothing else — see below. Article 50(2) binds the provider of the generating system; 50(4) binds the deployer of a system producing a deep fake. If you generated with someone else's model and published the result, you are typically the deployer, but that is a determination for counsel, not for this file. Carried verbatim into `scope.production.role`, whatever was written — including a value outside the vocabulary below, which `role-unrecognized` judges separately. Not shown in the gap list heading. |
-| `artistic_work` | `true` where the work is evidently artistic, creative, satirical or fictional. Under 50(4) that narrows the disclosure duty to a form that does not hamper the work's display. It does not remove it. Declared here it covers every asset; an asset entry (or `defaults`) overrides it for that asset. |
+| `title` | Free text. Carried into the JSON report's `scope.production.title` exactly as written — trimmed, the rule stated in [`title`, `operator` and `role` identify the report](#title-operator-and-role-identify-the-report-they-do-not-attest-to-anything) — and into the heading of the gap list as a code span with control characters removed (see [What a rendered value keeps](#what-a-rendered-value-keeps)), so a report handed on later identifies itself by something other than the absolute filesystem path it was scanned from. Blank or whitespace-only reads as absent, the same as omitting the key — no placeholder is written in its place. |
+| `operator` | The legal entity. Article 50 assigns duties to a provider and to a deployer; naming the entity is what lets anyone work out which one you are. Carried into `scope.production.operator` and the gap list heading exactly as written — trimmed — the same as `title`. |
+| `role` | `provider`, `deployer`, or `both`, and nothing else — see below. Article 50(2) binds the provider of the generating system; 50(4) binds the deployer of a system producing a deep fake. If you generated with someone else's model and published the result, you are typically the deployer, but that is a determination for counsel, not for this file. Carried into `scope.production.role` exactly as written — trimmed — whatever was written, including a value outside the vocabulary below, which `role-unrecognized` judges separately. Not shown in the gap list heading. |
+| `artistic_work` | `true` where the work is evidently artistic, creative, satirical or fictional. Under 50(4) that narrows the disclosure duty to a form that does not hamper the work's display. It does not remove it. Declared here it covers every asset; an asset entry (or `defaults`) overrides it for that asset. What it changes in the report: the Article 50(4) first-subparagraph record in `obligations_engaged` carries `narrowed_by_artistic_work`, its `requirement` states the narrowed rather than the full duty, and `deep-fake-disclosure-absent` remediates against that same reading. Recorded and never verified — whether a work is evidently artistic is a judgement about the work, not about its bytes — and it reaches 50(4) only: it lifts nothing under 50(2). |
 | `assistive_editing` | `true` where Article 50(2)'s own exception applies to the whole production — a restoration, cleanup or grade pass whose AI is assistive standard editing. Declared here it covers every asset; an asset entry (or `defaults`) overrides it. See [How `assistive_editing` is scored](#how-assistive_editing-is-scored). |
 | `public_interest_text` | `true` if the production publishes AI-generated text to inform the public on matters of public interest. |
 | `editorial_responsibility` | Who held editorial responsibility for that text, if anyone. Relevant only when `public_interest_text` is `true`, and it is one of two limbs — see below. |
@@ -252,6 +252,15 @@ comment that hides every real finding from a Markdown renderer — while an
 escape sequence would rewrite the terminal of anyone who `cat`-ed the report.
 The same neutralising is applied to asset paths and to the `role` that
 `role-unrecognized` quotes back, for the same reason.
+
+Length is bounded on the same surface and for the same reason. The gap list is
+a work list, so a value long enough to bury the findings underneath is cut where
+it is shown and marked with a trailing `...`: 200 characters for `title`, `operator`
+and `role`, which identify the report, and 1024 for an asset path, which is what
+you have to act on and may legitimately be deeply nested. A declared
+2,000,000-character title used to render as a 2 MB heading. The cut is to the
+gap list only — `scope.production` in the JSON report still carries the whole
+value, so nothing you declared is lost from the record.
 
 A value UTF-8 cannot encode at all — an unpaired surrogate, which JSON permits
 — is not papered over: the artifact cannot be written, and the scan exits `2`

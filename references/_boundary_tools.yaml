@@ -70,17 +70,17 @@
   params: [project_id, link_type, shot_id, asset_id, source_url, image_base64, filename, model_provider, model_name, render_type, prompt, params, input_media_ids, input_link_type]
   skill: genvid-agent-generation
 
-# register_media is the sibling of ingest_generated_media (#2022): same backend
+# register_media is the sibling of ingest_generated_media: same backend
 # path, split by attestation semantics. ingest claims "I just generated this"
 # (generation record the CUSTOMER's agent reports, so it signs externally_attested and
 # certifies at the ATTESTED tier — Genvid holds the bytes but did not witness the
-# generation; this said "verified tier" until #2575 corrected the over-claim —
+# generation; this said "verified tier" until a contract review corrected the over-claim —
 # billable flow); register claims only "this
 # file exists in my storage" (hash/fingerprint/metadata, no generation record,
 # registered tier). additive with mandatory HITL binding review. The customer's
 # agent computes hash/fingerprint/metadata + proxy locally and Genvid never sees
-# the original bytes — the registered residency class (offline-media epic #1757).
-# #2207: registration is two steps so the proxy never travels through a tool-call
+# the original bytes — the registered residency class (the offline-media residency work).
+# Registration is two steps so the proxy never travels through a tool-call
 # parameter — register_media reserves the row + returns a signed proxy_upload_url
 # (the agent PUTs the proxy bytes directly), then finalize_media_registration
 # records the claim on the uploaded proxy and binds the anchor.
@@ -96,7 +96,7 @@
   params: [project_id, media_id, link_type, shot_id, asset_id, content_hash, fingerprint_iscc, fingerprint_iscc_content, filename, mime_type, size_bytes, duration_seconds, timecode, locator, locator_type, pre_signed_c2pa_manifest, input_media_ids, storage_class, connection_name]
   skill: genvid-media-registration
 
-# resolve_media is the read-only sibling of media_read (#2023 PR3): media_read
+# resolve_media is the read-only sibling of media_read: media_read
 # returns one signed URL + trust state; resolve_media returns the full residency
 # picture — every locator with its fixity status (status, status_reason,
 # last_verified_at, last_verified_by) and either the Genvid-held proxy_url or the
@@ -107,7 +107,7 @@
   params: [project_id, media_id]
   skill: genvid-agent-generation
 
-# check_conformance (#2707) answers whether a 3D artifact satisfies what its
+# check_conformance answers whether a 3D artifact satisfies what its
 # destination requires at the stage its asset link declares — triangle budgets,
 # watertightness, bone naming and hierarchy, influence caps, rest pose, coordinate
 # convention. Genvid measures the bytes it holds; the caller supplies no thresholds
@@ -119,7 +119,7 @@
   params: [project_id, asset_id, media_id]
   skill: genvid-agent-generation
 
-# verify_media is the sibling of register_media (#2023): register CREATES a
+# verify_media is the sibling of register_media: register CREATES a
 # registered-tier registry entry from a proxy + claim; verify MAINTAINS one — the
 # customer's agent recomputes the original's SHA-256 locally and reports its
 # current locator (no proxy, no generation record, no anchor). A hash match
@@ -131,14 +131,14 @@
   params: [project_id, media_id, content_hash, locator, locator_type]
   skill: genvid-media-registration
 
-# connect_media is the explicit, HITL-triggered registered->connected residency flip
-# (#2283 D4): the customer's agent names the storage connection + object key where an
+# connect_media is the explicit, HITL-triggered registered->connected residency flip:
+# the customer's agent names the storage connection + object key where an
 # already-registered media's bytes actually live; Genvid streams the object
 # transiently, verifies its hash against the registered claim, and on a match flips
 # the media to connected (a new customer_s3 locator is added, the original
 # customer_path row is kept as history). additive — never destructive/automatic; a
 # mismatch refuses the flip. Reaches the backend via PATCH .../media/{media_id}
-# storage_class="connected" (#2283/#2284 PR3 remodel — per-route review rejected a
+# storage_class="connected" (a per-route review rejected a
 # dedicated /actions/connect route since storage_class is a settable media field);
 # tool name/contract unchanged.
 - name: connect_media
@@ -148,8 +148,8 @@
   skill: genvid-media-registration
 
 # approve_media sets a generated media's selection_status for production use:
-# 'selected' to approve, 'discard' to reject, 'pending' to reset to undecided
-# (#2195). destructive because it overwrites the previous selection; each of the
+# 'selected' to approve, 'discard' to reject, 'pending' to reset to undecided.
+# destructive because it overwrites the previous selection; each of the
 # three values stays reachable by a later call, so a rejection is not terminal.
 # This is the boundary's selection surface. It mints no approval id — the human
 # decision to allow the call is captured by your MCP client's own prompt, and the
@@ -159,7 +159,22 @@
   status: live
   params: [project_id, media_id, selection_status]
 
-# export_provenance_report reads a production's audit trail (#2212): what was
+# record_approved_corrections records (or supersedes) the active
+# per-(target, stage) hand-tuned correction values for an asset, anchored to
+# the exact media approved against (e.g. per-bone posture corrections for a
+# titan mesh, valid only for that mesh). destructive because it supersedes
+# any existing active correction for the same axis; history survives via
+# get_approved_corrections_with_state's include_history, not through this
+# tool. payload is a JSON-object-encoded string, not a raw object — the
+# correction's keys are target-defined and dynamic. Deployed to prod 2026-08-19
+# (auto-deploy, apply-migrations green) and witnessed live: four
+# correction rows recorded on the production EFT project, states returned.
+- name: record_approved_corrections
+  classification: destructive
+  status: live
+  params: [project_id, asset_id, target, stage, media_id, link_type, payload, note]
+
+# export_provenance_report reads a production's audit trail: what was
 # generated, by which model, at which attestation tier, with what approval chain,
 # residency, and cost, tied to the signed C2PA manifests. Returns inline JSON
 # (default) or Markdown. read_only — it reads the record, it does not add to it.
@@ -185,7 +200,7 @@
   params: [method, project_id, resource_type, resource_id, task_type, assigned_to_email, workflow_status, priority]
   skill: genvid-agent-generation
 
-# review_read / review_write are the boundary feedback surface (#2423): reading
+# review_read / review_write are the boundary feedback surface: reading
 # review transitions/comments/auto-demotion provenance, and writing decision-events
 # (transcribed rulings, automated pipeline findings, iteration-chain summaries).
 # A review_write row lands in decision_event, not entity_events.
@@ -214,7 +229,7 @@
   skill: genvid-screenplay-breakdown
 
 # breakdown_assets / breakdown_storyboard / sync_assets_with_screenplay were retired
-# with the in-house composition backend (#1171, contract 0.3.0). Composition inference
+# with the in-house composition backend (contract 0.3.0). Composition inference
 # now runs in the customer's BYOK agent via the governed write tools (scenes_write /
 # assets_write / shots_write / storyboard_write).
 - name: assets_read
@@ -269,7 +284,7 @@
   params: [method, project_id, shot_id, prompt, description, shot_size, camera_angle, camera_movement, shot_framing, transition]
   skill: genvid-scene-shot-design
 
-# storyboard_write is agent-authored composition (#1821, #1667). Per-method risk:
+# storyboard_write is agent-authored composition. Per-method risk:
 # compose = destructive (full create/replace, pre-cert); insert = additive
 # (change-order, post-cert). Every shot carries a content anchor (provenance.quote)
 # the boundary resolves to block ids fail-fast.
@@ -285,7 +300,7 @@
 # (MASCELLI_SIZE_ANGLE, BEAT_NO_COVERAGE) are always advisory. Script divergence
 # (DIVERGED_FROM_SCRIPT) is advisory when a cited screenplay block still resolves
 # but has changed, and severity "blocking" when a cited block no longer exists —
-# a blocking one is enforced server-side at storyboard approval (#2141), so it
+# a blocking one is enforced server-side at storyboard approval, so it
 # refuses the approve rather than only warning. Reading is never blocked.
 - name: get_storyboard
   classification: read_only
@@ -296,4 +311,4 @@
 # generate_first_frames is intentionally NOT listed: it is platform/UI-side only
 # (in-graph agent + REST UI) and withheld from the remote MCP transport, so external
 # agents cannot call it. They compose first frames bring-your-own-model
-# (media_read -> own provider -> ingest_generated_media). See ADR-019, #1723.
+# (media_read -> own provider -> ingest_generated_media). See ADR-019.

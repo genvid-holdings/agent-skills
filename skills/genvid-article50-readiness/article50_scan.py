@@ -117,6 +117,16 @@ ARTICLE_APPLIES_FROM = "2026-08-02"
 # above have a transitional period to bring the 50(2) marking and detection
 # obligations into conformity. It reaches 50(2) only.
 ARTICLE_50_2_TRANSITION_ENDS = "2026-12-02"
+# That date is not in Regulation (EU) 2024/1689 as adopted: it comes from the
+# later instrument amending it, which is what set the transitional period. The
+# date was printed in `scope` beside `regulation` and in the limits with no
+# instrument named anywhere -- in the code, in SKILL.md or in DECLARATION.md --
+# so a reader had every reason to take it for the Regulation's own. It travels
+# with its source now, on both surfaces that print it.
+ARTICLE_50_2_TRANSITION_SOURCE = (
+    "Digital Omnibus on AI, the instrument amending Regulation (EU) 2024/1689; the date is "
+    "not in the Regulation as originally adopted"
+)
 
 # The complete origin vocabulary a report can carry. SKILL.md publishes this list
 # for consumers to key on, and a test holds the two in agreement -- documenting a
@@ -130,6 +140,24 @@ ORIGIN_VALUES = (
     "contested",
     "undetermined",
 )
+
+# The instrument a gap rests on. `reference` names the paragraph a finding rides
+# on, which is a different question: the two-layer expectation below is sourced
+# to the voluntary Code of Practice on Transparency of AI-Generated Content and
+# rides on Article 50(2), so it carried the identical `"reference": "Article
+# 50(2)"` that `machine-readable-marking-absent` carries. A consumer filtering
+# gaps by reference could not tell a duty the Regulation writes from a practice
+# a voluntary code recommends, which is the difference that decides whether a
+# finding blocks a delivery. `basis` is what separates them.
+GAP_BASIS_STATUTORY = "statutory"
+GAP_BASIS_CODE_OF_PRACTICE = "code-of-practice"
+GAP_BASES = (GAP_BASIS_STATUTORY, GAP_BASIS_CODE_OF_PRACTICE)
+# The gap ids sourced to the code of practice rather than to the Regulation.
+# Anything absent from here is stamped statutory, which is the claim `reference`
+# already makes for it. A test holds this set to the findings whose own text
+# cites the code, so a voluntary-code gap added later cannot ship wearing the
+# statutory marker by default.
+CODE_OF_PRACTICE_GAP_IDS = frozenset({"second-marking-layer-unevidenced"})
 
 # Article 50(4) has two subparagraphs and they reach different material. The
 # FIRST covers "image, audio or video content constituting a deep fake"; text is
@@ -233,6 +261,12 @@ C2PA_BMFF_UUID = bytes.fromhex("d8fec3d61b0e483c92975828877ec481")
 C2PA_JUMBF_TYPE_UUID = bytes.fromhex("6332706100110010800000aa00389b71")
 PNG_C2PA_CHUNK = b"caBX"
 WEBP_C2PA_CHUNK = b"C2PA"
+# The four-byte box tag each identifier sits immediately behind, which is the
+# least structure a real manifest store cannot be without. ISO/IEC 19566-5 makes
+# the JUMBF type UUID the first field of the 'jumd' description box; ISO/IEC
+# 14496-12 puts a 'uuid' box's usertype directly after the box type.
+JUMBF_DESCRIPTION_TAG = b"jumd"
+BMFF_UUID_TAG = b"uuid"
 # The common identifier opening an ISO/IEC 19566-5 box segment in JPEG APP11.
 JPEG_BOX_SEGMENT_ID = b"JP"
 SIDECAR_SUFFIXES = (".c2pa",)
@@ -467,12 +501,26 @@ def _read_edges(path: Path, max_bytes: int):
     return head, tail, size
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as fh:
-        for block in iter(lambda: fh.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+def _sha256_regions(head: bytes, tail: bytes) -> str:
+    """Digest of exactly the bytes the read budget took off the file.
+
+    This used to hash the file end to end, opening every asset a second time
+    and reading all of it however small --max-bytes was set. The budget
+    bounded the metadata reads and nothing else, so on a production directory
+    of MOV/MXF the hash pass alone made scan cost scale with total footage on
+    disk -- the one thing --max-bytes exists to stop.
+
+    The digest now covers the same two regions every other reading in the
+    record comes from, which makes it a fingerprint of the evidence the record
+    actually rests on rather than of bytes nobody looked at. Where the budget
+    reached the whole file -- any asset at or under 2 * max_bytes, which is
+    most stills -- ``tail`` is empty and this is byte for byte what ``sha256sum``
+    prints, so the identity anchor survives wherever it can be honest. Where it
+    did not, the value ships under a name that says so, beside the region it
+    covers. A partial digest under a bare ``sha256`` key is the defect, not the
+    partiality.
+    """
+    return hashlib.sha256(head + tail).hexdigest()
 
 
 def _xmp_spans(blob: bytes):
@@ -915,7 +963,7 @@ def _exif_software(payload: bytes):
 #   detail   the human-readable sentence the report prints.
 #
 # A record with counts_as_marking False must never raise the marking axis. That
-# is the defect class this shape exists to close (#2674): detection used to
+# is the defect class this shape exists to close: detection used to
 # answer with a substring guess, and every guess that landed suppressed the
 # high-severity machine-readable-marking-absent gap on a declared-AI asset.
 
@@ -995,6 +1043,27 @@ def _remote_manifest_url(xmp: str):
     return None
 
 
+def _identifier_in_box_header(region: bytes, at: int, tag: bytes) -> bool:
+    """True when the 16-byte identifier at ``region[at:at + 16]`` follows ``tag``.
+
+    Sixteen bytes of entropy are not a marking. A supplier who appends
+    the C2PA type UUID to a delivery changes no container and carries no
+    manifest, and crediting that byte match downgraded a declared-AI asset's
+    high-severity missing-marking gap to the medium unreadable-origin one -- a
+    "marking present" anyone can manufacture, which is the class this check sets out
+    to close. The identifier is credited only where the container's own box
+    header sits in front of it.
+
+    Both formats also carry a 64-bit length that displaces the tag: a JUMBF LBox
+    of 1 puts an 8-byte XLBox after the TBox, and a BMFF size of 1 an 8-byte
+    largesize. `_jumbf_c2pa_store` and `_bmff_boxes` both accept that form, so
+    refusing it here would read an asset those readers call marked as unmarked.
+    """
+    if at >= 4 and region[at - 4:at] == tag:
+        return True
+    return at >= 16 and region[at - 16:at - 8] == b"\x00\x00\x00\x01" + tag
+
+
 def _c2pa_tagged_chunk(chunks, tag: bytes, locator: str, label: str):
     """Evidence from a container chunk the format reserves for C2PA.
 
@@ -1067,7 +1136,7 @@ def _detect_c2pa(head: bytes, tail: bytes, ext: str):
     """Marking-evidence records for C2PA content credentials.
 
     Two rules hold throughout, and both exist because the earlier reader broke
-    them (#2674):
+    them:
 
     1. A container is walked structurally and the C2PA type UUID is confirmed in
        the position the specification puts it, or the record says ``scanned``.
@@ -1105,25 +1174,46 @@ def _detect_c2pa(head: bytes, tail: bytes, ext: str):
     if not any(item["counts_as_marking"] for item in records) and not rejected_in_place:
         # No structural walk reached it: either this reader does not walk the
         # container, the manifest sits below the top level, or only the file's
-        # two ends were read. Fall back to the 128-bit C2PA identifiers, which
-        # carry enough entropy to stand on their own -- and to nothing weaker.
-        # Each region is searched on its own so no match spans the join.
-        scanned = None
+        # two ends were read. Fall back to the 128-bit C2PA identifiers -- but
+        # only where the container's own box header sits in front of one, which
+        # is what tells a manifest store from sixteen appended bytes.
+        # A bare match is still recorded, as the non-marking it is: "the
+        # identifier is in this file and nothing around it is a container" is a
+        # fact worth showing an operator, and a different one from finding
+        # nothing at all.
+        # Each region is searched on its own so no match spans the join, and
+        # every occurrence is read, so a fabricated copy cannot hide a real one.
+        scanned, bare = None, None
         for name, region in regions:
-            for identifier, detail in (
-                (C2PA_JUMBF_TYPE_UUID, "C2PA JUMBF manifest store identifier"),
-                (C2PA_BMFF_UUID, "C2PA box identifier"),
+            for identifier, tag, detail in (
+                (C2PA_JUMBF_TYPE_UUID, JUMBF_DESCRIPTION_TAG,
+                 "C2PA JUMBF manifest store identifier"),
+                (C2PA_BMFF_UUID, BMFF_UUID_TAG, "C2PA box identifier"),
             ):
-                if identifier in region:
-                    scanned = _evidence(
-                        "c2pa.manifest_store", "embedded", "bytes:" + name, "scanned",
-                        "manifest_present",
-                        "%s found in the container (container structure not confirmed)" % detail,
-                        region=name)
+                at = region.find(identifier)
+                while at != -1 and not scanned:
+                    if _identifier_in_box_header(region, at, tag):
+                        scanned = _evidence(
+                            "c2pa.manifest_store", "embedded", "bytes:" + name, "scanned",
+                            "manifest_present",
+                            "%s in a '%s' box header (container structure not walked)"
+                            % (detail, tag.decode("ascii")),
+                            region=name)
+                    elif bare is None:
+                        bare = _evidence(
+                            "c2pa.manifest_store", "embedded", "bytes:" + name, "scanned",
+                            "unknown",
+                            "%s found in the file with no '%s' box header in front of it: "
+                            "bytes anyone can write, not a manifest store"
+                            % (detail, tag.decode("ascii")),
+                            region=name, counts_as_marking=False)
+                    at = region.find(identifier, at + 1)
+                if scanned:
                     break
             if scanned:
-                records.append(scanned)
                 break
+        if scanned or bare:
+            records.append(scanned or bare)
 
     for name, region in regions:
         url = _remote_manifest_url(_extract_xmp(region))
@@ -1346,7 +1436,7 @@ def _detect_sidecars(path: Path, stems=None):
 
     Every candidate is opened. Presence of a file with the right name used to be
     the whole test, which credited empty exports, unrelated editorial JSON, and
-    one asset's manifest to every other asset sharing its stem (#2674).
+    one asset's manifest to every other asset sharing its stem.
 
     ``stems`` is the scan-wide StemIndex. Called without one -- a direct call in
     a test, say -- each call gets its own, which is the pre-index behaviour.
@@ -1758,7 +1848,17 @@ def _load_declaration(root: Path, explicit):
                 return None, candidate, shape
             return data, candidate, None
     if explicit:
-        return None, Path(explicit), "declaration file not found"
+        # "Present but not a file" and "not there at all" want different
+        # repairs from the operator, and only one of them was ever reported:
+        # is_file() is false for a directory too, so `--declaration ./somedir`
+        # fell through to the missing-path message and told an operator who had
+        # pointed at the right place that nothing was there.
+        path = Path(explicit)
+        if path.is_dir():
+            return None, path, "that is a directory, not a declaration file"
+        if path.exists():
+            return None, path, "that is not a regular file"
+        return None, path, "declaration file not found"
     return None, None, None
 
 
@@ -1844,8 +1944,25 @@ def _text(value) -> str:
 # terminal or a renderer without appearing as text.
 _RENDER_BREAKS = "\t\n\r\v\f\x1c\x1d\x1e\x1f\x85"
 
+# The gap list is a work list a person reads, and every value the declaration
+# puts in it is operator-authored and unbounded. A declared 2,000,000-character
+# title rendered as a 2 MB single-line heading. Two budgets, because the two
+# kinds of value are read for different reasons: `title`, `operator` and `role`
+# identify the report, so anything past a generous heading's worth adds nothing,
+# while an asset path is what the operator has to act on, so it gets room for a
+# deeply nested real one -- Linux caps a path at 4096 bytes, and a declaration
+# key is only bounded by the declaration.
+RENDER_TEXT_LIMIT = 200
+RENDER_PATH_LIMIT = 1024
+# ASCII, deliberately. stdout is not always UTF-8 (a set PYTHONIOENCODING, a
+# minimal container, a Windows codepage), a write that cannot encode is exit 2,
+# and this mark is appended to values the operator may have written in pure
+# ASCII -- a one-character ellipsis would have made a long plain title the
+# reason an all-ASCII production could not be reported on at all.
+RENDER_TRUNCATION_MARK = "..."
 
-def _render_safe(value) -> str:
+
+def _render_safe(value, limit=None) -> str:
     """One line of wording, with nothing in it a renderer or a terminal obeys.
 
     `title`, `operator` and `role` are written by the party whose claims this
@@ -1863,6 +1980,11 @@ def _render_safe(value) -> str:
     left alone -- they are a value UTF-8 cannot encode at all, which is a
     delivery failure the write guard in `main` reports as exit 2 rather than
     something to paper over here.
+
+    `limit` bounds the rendered result for the callers whose value comes from
+    the declaration. The cut is marked rather than silent, because a shortened
+    title otherwise reads as the operator's own wording, and it is applied after
+    neutralisation so the budget counts characters a reader actually sees.
     """
     kept = []
     for ch in str(value):
@@ -1875,7 +1997,10 @@ def _render_safe(value) -> str:
             continue
         else:
             kept.append(ch)
-    return " ".join("".join(kept).split())
+    rendered = " ".join("".join(kept).split())
+    if limit is not None and len(rendered) > limit:
+        return rendered[:limit] + RENDER_TRUNCATION_MARK
+    return rendered
 
 
 def _code_span(text: str) -> str:
@@ -2121,7 +2246,7 @@ def assess_asset(path: Path, root: Path, declaration, max_bytes: int, stems=None
     head, tail, size = _read_edges(path, max_bytes)
     # `blob` joins two NON-ADJACENT regions of the file, so any byte sequence
     # lying across the join exists in this variable and nowhere on disk. Marking
-    # detection therefore takes the regions separately (#2674, RPI-3).
+    # detection therefore takes the regions separately.
     blob = head + tail
     # The XMP reader used to take the join too, on the reasoning that a packet
     # is self-delimiting and so could not be assembled by accident. Accident was
@@ -2131,7 +2256,7 @@ def assess_asset(path: Path, root: Path, declaration, max_bytes: int, stems=None
     # out of it marked the asset synthetic -- a marking the file does not carry,
     # asserting a duty discharged rather than withholding one. Each region is
     # read on its own and the results concatenated, which is what the C2PA
-    # reader beside it has done since #2674.
+    # reader beside it has done since pack 0.6.6.
     xmp = "\n".join(packet for packet in (_extract_xmp(head), _extract_xmp(tail))
                     if packet)
 
@@ -2285,18 +2410,41 @@ def assess_asset(path: Path, root: Path, declaration, max_bytes: int, stems=None
             ),
         })
     if deepfake_engaged:
+        # Article 50(4)'s first subparagraph narrows the FORM of the duty where
+        # the content forms part of an evidently artistic, creative, satirical
+        # or fictional work: what is disclosed is the existence of the generated
+        # content, in a manner that does not hamper the display or enjoyment of
+        # the work. An attenuation, never an exemption -- and the one thing
+        # `artistic_work` is declared for. This record used to name the
+        # narrowing whatever the declaration said, so it read identically for an
+        # operator who had claimed the carve-out and one who had not: a field
+        # this tool parses, resolves across two levels and type-checks, and then
+        # consumed nowhere. Whether a work is evidently artistic is a judgement
+        # about the work rather than about these bytes, so it is recorded as
+        # declared and never verified -- the convention `assistive_editing` and
+        # `watermark` already follow.
         obligations.append({
             "reference": "Article 50(4)",
             "subparagraph": "first",
             "bears_on": "deployer",
+            "narrowed_by_artistic_work": declared_artistic,
             "requirement": (
-                "disclose that the content is artificially generated or manipulated; where the work is evidently "
-                "artistic, creative, satirical, fictional or analogous, the obligation is limited to disclosing "
-                "the existence of the generated content in a manner that does not hamper the display or enjoyment "
-                "of the work; an attenuation, not an exemption"
+                "disclose the existence of the artificially generated or manipulated content in a manner "
+                "that does not hamper the display or enjoyment of the work: the form the duty takes where "
+                "the content forms part of an evidently artistic, creative, satirical, fictional or "
+                "analogous work; an attenuation, not an exemption"
+                if declared_artistic else
+                "disclose that the content is artificially generated or manipulated"
             ),
             "note": (
-                "This is not discharged by the machine-readable marking under 50(2): such markings are not "
+                ("The narrowed form rests on the declared `artistic_work`, which this tool records and does "
+                 "not verify: whether a work is evidently artistic, creative, satirical or fictional is a "
+                 "judgement about the work, not about these bytes. "
+                 if declared_artistic else
+                 "`artistic_work` is declared for neither this asset nor its production, so the unnarrowed "
+                 "form is the one stated. Declaring it narrows the form the disclosure takes; it never "
+                 "lifts the duty. ")
+                + "This is not discharged by the machine-readable marking under 50(2): such markings are not "
                 "immediately clear and distinguishable to the people exposed to the content. Treat the two "
                 "paragraphs as separate axes."
             ),
@@ -2329,10 +2477,24 @@ def assess_asset(path: Path, root: Path, declaration, max_bytes: int, stems=None
 
     human_disclosure = _has_text(declared_disclosure) or _has_text(production.get("disclosure_statement"))
 
+    # Derived from what was actually read, not from whether a tail read
+    # happened. An empty tail is also what a budget too small to reach the end
+    # of the file produces, so keying off it reported a scan that read nothing
+    # at all as full coverage. Computed once and published twice --
+    # beside the digest and under `signals` -- so the scope of the hash can
+    # never drift from the coverage the rest of the record is read against.
+    coverage = ("whole file" if len(head) + len(tail) >= size
+                else "first and last %d bytes" % max_bytes)
+
     return {
         "path": relpath,
         "bytes": size,
-        "sha256": _sha256(path),
+        "sha256_scanned_regions": _sha256_regions(head, tail),
+        # The digest's scope travels with the digest rather than being left to
+        # be inferred from `signals.scan_coverage` further down the record: a
+        # consumer that reads the hash has to see what it covers without
+        # holding the rest of the asset entry.
+        "sha256_covers": coverage,
         "modality": modality,
         "extension": ext,
         "origin": origin,
@@ -2374,12 +2536,8 @@ def assess_asset(path: Path, root: Path, declaration, max_bytes: int, stems=None
                 "assessed": False,
                 "note": "not assessed; detecting a watermark requires the detector matching the embedder",
             },
-            # Derived from what was actually read, not from whether a tail read
-            # happened. An empty tail is also what a budget too small to reach
-            # the end of the file produces, so keying off it reported a scan
-            # that read nothing at all as full coverage.
-            "scan_coverage": ("whole file" if len(head) + len(tail) >= size
-                              else "first and last %d bytes" % max_bytes),
+            # Same string as `sha256_covers` above: see the note there.
+            "scan_coverage": coverage,
         },
         "disclosure": {
             "machine_readable_marking": "present" if machine_readable else "absent",
@@ -2410,6 +2568,19 @@ def assess_asset(path: Path, root: Path, declaration, max_bytes: int, stems=None
         # asserting has to be visible as a decision, not as an absence.
         "obligations_disapplied": disapplied,
     }
+
+
+def stamp_basis(gaps):
+    """Mark every gap with the instrument it rests on. See GAP_BASES.
+
+    Stamped in one place rather than at the two dozen emission sites: a marker
+    that only some gaps carry is worse than none, because an absent `basis`
+    reads as the statutory default it was never asserted to be.
+    """
+    for gap in gaps:
+        gap["basis"] = (GAP_BASIS_CODE_OF_PRACTICE if gap["id"] in CODE_OF_PRACTICE_GAP_IDS
+                        else GAP_BASIS_STATUTORY)
+    return gaps
 
 
 def find_gaps(asset):
@@ -2593,7 +2764,20 @@ def find_gaps(asset):
             "reference": "Article 50(4)",
             "asset": rel,
             "finding": "This asset is declared a deep fake, but no human-readable disclosure text is recorded for it or for the production.",
-            "remediation": "Write the disclosure a person will actually see and record it in the declaration. Where the work is evidently artistic or fictional the duty is narrower, not absent; it still has to be disclosed in a way that does not hamper the work's display.",
+            # The remediation states the duty this operator actually has. Naming
+            # the narrower form to everyone read as an offer where nothing was
+            # declared, and naming it to nobody would withhold the only thing
+            # `artistic_work` does.
+            "remediation": (
+                "Write the disclosure a person will actually see and record it in the declaration. "
+                + ("This work is declared evidently artistic, so the duty is the narrower one: disclose "
+                   "the existence of the generated content in a way that does not hamper the work's "
+                   "display. Narrower is not absent."
+                   if asset["declared"]["artistic_work"] else
+                   "Nothing declares this work evidently artistic, so the duty is the full one: disclose "
+                   "that the content is artificially generated or manipulated. Declaring `artistic_work` "
+                   "narrows the form that disclosure takes; it does not remove it.")
+            ),
         })
     if asset["declared"]["deep_fake"] and not deep_fake_modality:
         gaps.append({
@@ -2864,7 +3048,7 @@ def production_gaps(declaration, declaration_path, assets, declaration_error=Non
                 "The declaration states production.role as %s, which is not one of the roles "
                 "Article 50 assigns duties to, so it says no more about which duties this "
                 "production claims than leaving the field empty would."
-                % json.dumps(_render_safe(role), ensure_ascii=False)
+                % json.dumps(_render_safe(role, RENDER_TEXT_LIMIT), ensure_ascii=False)
             ),
             "remediation": (
                 "Write one of provider, deployer, or both. 50(2) binds the provider of the "
@@ -3143,6 +3327,7 @@ def scan(root: Path, declaration_path=None, max_bytes=DEFAULT_MAX_BYTES, include
     gaps.extend(unreadable_asset_gaps(unreadable))
     for asset in assets:
         gaps.extend(find_gaps(asset))
+    stamp_basis(gaps)
 
     try:
         disclosure_files = sorted(
@@ -3172,8 +3357,8 @@ def scan(root: Path, declaration_path=None, max_bytes=DEFAULT_MAX_BYTES, include
 
     # Free text an operator wrote about the production, not a finding: carried
     # verbatim, never validated, the same convention as the per-asset `declared`
-    # block below. `_text` is the same blank/non-string-as-absent rule #2685
-    # applied to `operator` and `role` as gap inputs -- applied here so a blank
+    # block below. `_text` is the same blank/non-string-as-absent rule pack
+    # 0.7.0 applied to `operator` and `role` as gap inputs -- applied here so a blank
     # title reaches the report as `null`, never as a space or an invented name.
     # `role` is carried whatever was written, including a value outside its
     # vocabulary: `role-unrecognized` in production_gaps is what judges it, and
@@ -3198,11 +3383,12 @@ def scan(root: Path, declaration_path=None, max_bytes=DEFAULT_MAX_BYTES, include
             "regulation": "Regulation (EU) 2024/1689, Article 50",
             "applies_from": ARTICLE_APPLIES_FROM,
             "article_50_2_transition_ends": ARTICLE_50_2_TRANSITION_ENDS,
+            "article_50_2_transition_source": ARTICLE_50_2_TRANSITION_SOURCE,
         },
         "limits": [
             "This tool reports evidence found in the files themselves. It does not determine compliance and its output is not legal advice.",
             "Coverage is stated, not assumed: a file this scan could not read is counted under 'unreadable', raised as its own gap, and named in the gap list. Nothing that went unexamined is reported as clean, and named pipes, sockets and device nodes are recorded as unread rather than opened. A symlink pointing at a directory is reported the same way and is not followed, so a linked folder is named in the report but nothing inside it is examined or counted; a real subdirectory is walked as usual and its files are reported under their own paths. A directory that cannot be listed is always reported, whatever the extension scope, because it withholds an unknown number of files rather than one; a declared asset underneath it is reported too, naming the directory that blocked it. That applies to what is in scope -- a recognized media extension, a declared path, or any file under --include-other; an unrecognized extension that nothing declares is not covered whether or not it can be read. One set of directory names is skipped ahead of all of that, wherever it appears: %s, which hold tooling rather than deliverables and are never descended into. A declared path underneath one is still reported, naming the directory that withheld it, because a path the operator named is a duty nobody would otherwise be checking." % ", ".join(sorted(SKIP_DIRS)),
-            "Where an asset was too large for the read budget, its scan_coverage names the bytes actually read. A signal sitting outside that window is not reported, because it was not looked at.",
+            "Where an asset was too large for the read budget, its scan_coverage names the bytes actually read. A signal sitting outside that window is not reported, because it was not looked at. The recorded digest obeys the same budget: sha256_scanned_regions covers exactly the region sha256_covers names, which is the whole file only where the whole file was read. For a larger asset it is a digest of the scanned regions and not of the deliverable, so it identifies the evidence this record rests on and must not be compared against a whole-file checksum.",
             "Imperceptible watermarks are not assessed. Metadata inspection cannot substitute for the detector that matches the embedder, so a second marking layer can be declared here but never confirmed.",
             "Content-credential detection is presence-only: signatures and trust chains are not validated, and neither is the origin the manifest asserts. A manifest whose contents this tool cannot read leaves Article 50(2)'s second limb unevidenced rather than met, which is why an asset carrying one can still raise a marking finding.",
             "Presence is established by confirming the C2PA identifier where the container specification puts it. Where the container could not be walked, the evidence is recorded as scanned rather than parsed and the manifest's position in the file is unconfirmed.",
@@ -3211,6 +3397,7 @@ def scan(root: Path, declaration_path=None, max_bytes=DEFAULT_MAX_BYTES, include
             "Article 50(4) is read as two subparagraphs reaching different material: a deep fake in image, audio or video, and AI-generated text published to inform the public on matters of public interest. Each asset is routed by the modality its extension implies, which is a guess about the file, not a determination about the work.",
             "Origin calls for assets with no declaration entry rest on metadata a generating tool happened to leave behind, which any transcode, screenshot or re-encode removes.",
             "The IPTC digital source type is read only from the asset's own embedded XMP packet. An XMP sidecar (<asset>.xmp, the standard raw workflow) is not associated with its asset, so a raw file marked only in its sidecar reports its origin as undetermined rather than as marked.",
+            "A JPEG ExtendedXMP packet is not reassembled. XMP larger than one APP1 segment is split across further segments keyed by the standard packet's xmpNote:HasExtendedXMP GUID, and this reader locates self-contained packets rather than following that GUID, so a property broken across a chunk boundary is not read. A digital source type carried only in the extension is therefore reported as undetermined rather than as marked.",
             "Generator names are matched only in the metadata fields that name the producing software (XMP CreatorTool, Software, softwareAgent and Producer; EXIF Software; PNG Software, Source and generation-parameter chunks; the MP4/MOV metadata atoms " + ", ".join(_ascii_atom(atom) for atom in BMFF_SOFTWARE_ATOMS) + ", writing (c) for the copyright sign those atom names begin with, and any reverse-DNS key ending in " + ", ".join(BMFF_SOFTWARE_KEY_TAILS) + "). A generator named anywhere else in the metadata is not counted, in a video container as in a still: a comment, a title, a location or an author naming a photographer called Sora is subject matter. A pipeline that writes its name only into free text is therefore not detected.",
             "Generation parameters are recognized by the shape of the parameter block, wherever it is written: a PNG text chunk, the XMP packet, a JPEG COM segment, or EXIF UserComment wherever EXIF is carried. The test is at least three keys in 'Key: value' form of which at least one names a sampler setting (Sampler, CFG scale, Model hash, Negative prompt, Denoising strength, Clip skip, Schedule type, Hires upscaler). 'Steps', 'Size', 'Seed' and 'Version' are ordinary English, so no number of them alone qualifies a care label, a recipe or a product spec as a generation.",
             "Surfaces that normally carry a caption -- the XMP packet as a whole, a JPEG COM segment, an unrecognized PNG text key, EXIF ImageDescription -- must show at least TWO sampler-setting keys, because a block there is incidental rather than the field's purpose. EXIF UserComment is where generators write, so one is enough there. A pipeline whose block carries a single sampler-setting key and writes it only into a caption field is therefore not detected.",
@@ -3218,7 +3405,7 @@ def scan(root: Path, declaration_path=None, max_bytes=DEFAULT_MAX_BYTES, include
             "A pipeline that records its parameters in another form -- a ComfyUI or NovelAI JSON node graph outside the PNG chunk keys this tool knows (parameters, prompt, workflow, sd-metadata, invokeai_metadata) -- or that strips them, leaves no such signal.",
             "Article 50(2) and Article 50(4) are separate axes. A machine-readable marking does not discharge the deep-fake disclosure duty, because such markings are not clear and distinguishable to the people exposed to the content.",
             "Article 50(2)'s own exceptions come from the declaration, not the files. A declared assistive_editing invokes its third sentence -- the obligation does not apply to the extent that the system performs an assistive function for standard editing or does not substantially alter the input data provided by the deployer or the semantics thereof -- so the marking duty and its gaps lift there, recorded under obligations_disapplied as declared and never verified. Its other exception, authorised by law to detect, prevent, investigate or prosecute criminal offences, is not modelled.",
-            "Generative systems placed on the market before the application date have a transitional period for the Article 50(2) marking and detection obligations only. Whether that applies to any given system is a question about the system, not about these files.",
+            "Generative systems placed on the market before the application date have a transitional period for the Article 50(2) marking and detection obligations only, ending %s. That date is sourced to the %s. Whether the transition applies to any given system is a question about the system, not about these files." % (ARTICLE_50_2_TRANSITION_ENDS, ARTICLE_50_2_TRANSITION_SOURCE),
             "The formats this tool reads (content credentials, IPTC digital source type) are de-facto industry implementations. Neither is named in the Regulation, the Commission guidelines, or the code of practice, none of which mandates any specific standard.",
         ],
         "counts": counts,
@@ -3231,7 +3418,7 @@ def scan(root: Path, declaration_path=None, max_bytes=DEFAULT_MAX_BYTES, include
 def render_gap_list(report) -> str:
     counts = report["counts"]
     # A handed-on report is otherwise identified only by `Scope:`, an absolute
-    # filesystem path meaningful to nobody who did not run the scan (#2687).
+    # filesystem path meaningful to nobody who did not run the scan.
     # title and operator are declared, not verified -- see scope.production --
     # so they are named in the heading rather than asserted as fact. Either or
     # both may be absent; nothing is invented to fill the gap.
@@ -3241,8 +3428,8 @@ def render_gap_list(report) -> str:
     # newline and open a forged `## Gaps` section reading "No gaps recorded",
     # or start an `<!--` that hides every real finding from a renderer.
     production = report["scope"].get("production") or {}
-    title = _render_safe(production.get("title") or "")
-    operator = _render_safe(production.get("operator") or "")
+    title = _render_safe(production.get("title") or "", RENDER_TEXT_LIMIT)
+    operator = _render_safe(production.get("operator") or "", RENDER_TEXT_LIMIT)
     identity = (([_code_span(title)] if title else [])
                 + (["operator: %s" % _code_span(operator)] if operator else []))
     heading = "# Article 50 gap list"
@@ -3293,7 +3480,7 @@ def render_gap_list(report) -> str:
                 # An asset path is as attacker-shaped as a declared field: a
                 # filename may legally carry a newline or a backtick, and both
                 # break out of the bullet the same way an operator's title did.
-                where = _render_safe(gap["asset"] or "(whole directory)")
+                where = _render_safe(gap["asset"] or "(whole directory)", RENDER_PATH_LIMIT)
                 lines += [
                     "- **%s**, %s: %s" % (_render_safe(gap["reference"]), _code_span(where),
                                           _render_safe(gap["finding"])),
@@ -3331,6 +3518,66 @@ def _discard_stdout() -> None:
         os.close(null)
 
 
+_STDOUT = object()  # the destination "-" names, distinct from any path
+
+
+def _output_destinations(args):
+    """Every artifact this invocation will write, as (flag, destination) pairs.
+
+    The destination is what two writers would have to share to interfere: the
+    resolved path for a file, or the stdout stream. Paths are resolved rather
+    than compared as typed, because `out.json` and `sub/../out.json` are one
+    place however differently they were spelled.
+    """
+    destinations = []
+    if args.out:
+        outdir = Path(args.out).expanduser().resolve()
+        destinations.append(("--out's article50-disclosure-report.json",
+                             outdir / "article50-disclosure-report.json"))
+        destinations.append(("--out's article50-gaps.md", outdir / "article50-gaps.md"))
+    for flag, value in (("--json", args.json), ("--gaps", args.gaps)):
+        if value:
+            destinations.append(
+                (flag, _STDOUT if value == "-" else Path(value).expanduser().resolve()))
+    return destinations
+
+
+def _output_collision(args):
+    """The first pair of requested artifacts that would land in one place.
+
+    Two writers to one path do not merge: the second overwrote the first, and
+    the run reported both as written either way, so `--json out.json --gaps
+    out.json` left the Markdown gap list under a name a CI gate opens expecting
+    the JSON report -- with nothing in the run saying the report had ever
+    existed. Two writers to stdout do not overwrite but concatenate, and a JSON
+    report followed by a Markdown gap list parses as neither: that is the
+    documented `--json - | jq` pipeline failing at the consumer instead of here.
+
+    Neither case has an answer this tool could pick on the operator's behalf, so
+    it names the pair and refuses. A destination that already exists and is not
+    a regular file is exempt: /dev/null keeps no bytes for a second write to
+    overwrite, and sending one artifact there is how SKILL.md documents
+    discarding it.
+    """
+    seen = {}
+    for flag, destination in _output_destinations(args):
+        if destination is not _STDOUT:
+            try:
+                if destination.exists() and not destination.is_file():
+                    continue
+            except OSError:
+                # Unstattable is the write guard's problem, not this check's.
+                pass
+        if destination in seen:
+            if destination is _STDOUT:
+                return ("%s and %s would both write to stdout; one stream cannot carry "
+                        "both a JSON report and a Markdown gap list" % (seen[destination], flag))
+            return ("%s and %s would both write %s; the second would overwrite the first"
+                    % (seen[destination], flag, destination))
+        seen[destination] = flag
+    return None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog=TOOL_NAME,
@@ -3347,6 +3594,9 @@ def main(argv=None):
                         help="also assess files whose extension is not a known media type")
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES,
                         help="per-end read budget for large files, at least 1 (default %d); "
+                             "it bounds every read of the asset, the hash pass included, so "
+                             "sha256_scanned_regions covers the bytes named by sha256_covers "
+                             "rather than the whole file; "
                              "it is not an unlimited switch, so 0 is rejected" % DEFAULT_MAX_BYTES)
     parser.add_argument("--exit-zero", action="store_true", help="exit 0 even when gaps are recorded")
     args = parser.parse_args(argv)
@@ -3361,6 +3611,12 @@ def main(argv=None):
         # signal. Refuse it rather than report a scan that examined no bytes.
         print("article50_scan: --max-bytes must be at least 1 (got %d)" % args.max_bytes,
               file=sys.stderr)
+        return 2
+    # Checked before the scan runs: this is a mistake in the invocation, and
+    # reporting it after a full directory walk only delays the same rerun.
+    collision = _output_collision(args)
+    if collision:
+        print("article50_scan: %s" % collision, file=sys.stderr)
         return 2
 
     try:

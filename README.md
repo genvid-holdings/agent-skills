@@ -6,7 +6,7 @@ This is the Genvid reference skill pack: a runtime-agnostic [Agent Skills](https
 
 The pack carries no tenant data. Each skill describes how to call the Genvid boundary: orienting the agent, connecting to generators, generating with provenance, gating destructive operations, propagating changes, and driving the production workflow from screenplay through storyboard. The pack version is matched to the boundary via `boundary_compat` in `pack.json`; see Compatibility below.
 
-One skill is the exception, and it is the one to start with if you have never heard of Genvid: **`genvid-article50-readiness`** drives no boundary tool at all and runs entirely offline.
+Two skills are the exception. **`genvid-article50-readiness`** drives no boundary tool at all and runs entirely offline: start there if you have never heard of Genvid. **`genvid-roblox-studio-ops`** drives Roblox Studio directly over its own built-in MCP server, not the Genvid boundary.
 
 ## Article 50 readiness (no account, no network)
 
@@ -19,11 +19,11 @@ git clone https://github.com/genvid-holdings/agent-skills.git
 python3 agent-skills/skills/genvid-article50-readiness/article50_scan.py /path/to/production -o ./article50-out
 ```
 
-**No Genvid account, no sign-up, no upload, no network call, and no dependency outside the Python 3.9+ standard library.** Your material never leaves the machine. Exit status is `0` when every file was read and no gaps were recorded, `1` when at least one gap was, and `2` when the scan could not run or could not finish — a bad path, an unreadable declaration, or artifacts that could not be delivered. So it works as a delivery gate in CI, and `2` is the code that must not be read as "gaps found": there is no usable report behind it.
+**No Genvid account, no sign-up, no upload, no network call, and no dependency outside the Python 3.9+ standard library.** Your material never leaves the machine. Exit status is `0` when every file was read and no gaps were recorded, `1` when at least one gap was, and `2` when the scan could not run or could not finish: a bad path, an unreadable declaration, or artifacts that could not be delivered. So it works as a delivery gate in CI, and `2` is the code that must not be read as "gaps found": there is no usable report behind it.
 
 It reads what each file actually carries: content credentials (JPEG APP11 JUMBF, PNG `caBX`, WebP `C2PA` chunk, BMFF `uuid` box, `.c2pa` sidecars), the IPTC digital source type in XMP, and generator metadata left by common pipelines. It reconciles that against an operator-authored `article50.json` declaration ([format](skills/genvid-article50-readiness/DECLARATION.md)).
 
-It also keeps two things apart that are commonly conflated: Article 50(2) requires marking **and** detectability, not just marking; and a machine-readable marking does not discharge the Article 50(4) deep-fake disclosure duty, because such markings are not clear and distinguishable to the people exposed to the content. A signed manifest with no on-screen disclosure is reported as the gap it is. Article 50(2)'s own exception is modelled as well, because post-production meets it constantly: declare `assistive_editing` where the system performed an assistive function for standard editing or did not substantially alter the input data or its semantics — AI denoise, upscale and cleanup — and the marking duty is recorded as disapplied for that asset instead of asserted against it. That is a declaration, recorded and never verified. The paragraph's law-enforcement clause is not modelled at all, and the report's limits say so.
+It also keeps two things apart that are commonly conflated: Article 50(2) requires marking **and** detectability, not just marking; and a machine-readable marking does not discharge the Article 50(4) deep-fake disclosure duty, because such markings are not clear and distinguishable to the people exposed to the content. A signed manifest with no on-screen disclosure is reported as the gap it is. Article 50(2)'s own exception is modelled as well, because post-production meets it constantly: declare `assistive_editing` where the system performed an assistive function for standard editing or did not substantially alter the input data or its semantics (AI denoise, upscale and cleanup), and the marking duty is recorded as disapplied for that asset instead of asserted against it. That is a declaration, recorded and never verified. The paragraph's law-enforcement clause is not modelled at all, and the report's limits say so.
 
 **What it does not do.** It reports evidence and the absence of evidence. It does not determine compliance, and its output is not legal advice. That turns on facts a file scan cannot see. It does not assess imperceptible watermarks, because detecting one requires the detector matching the embedder; a watermark can be declared in the declaration but is never confirmed here. Its content-credential detection is presence-only: finding a manifest says nothing about whether the signature validates or whether the signer is one anyone downstream recognizes. Absence of a signal is not evidence of a camera: embedded metadata does not survive a transcode or a re-encode, so unmarked assets are reported as undetermined rather than guessed at. And the formats it reads are industry conventions: neither content credentials nor the IPTC digital source type is named in the Regulation, the Commission's guidelines, or the code of practice, none of which mandates a particular standard. The full scope limits are in the skill's [SKILL.md](skills/genvid-article50-readiness/SKILL.md) and are printed in every report.
 
@@ -61,6 +61,23 @@ git clone https://github.com/genvid-holdings/agent-skills.git
 ```
 
 Note: `.claude-plugin/` is a Claude Code convenience shim and is ignored by other runtimes. The pack itself is not Claude-only: all skill content lives in `skills/` and is runtime-agnostic.
+
+## Model requirements
+
+The pack puts creative and structural judgment on your agent, not on the boundary.
+Breakdown, beat and shot decomposition, and asset authoring are yours: the boundary
+validates and records what you author, it does not infer it for you.
+
+These skills need a high-reasoning model with a large context window, running with the
+strongest reasoning setting your runtime exposes. Faster, cheaper, or low-reasoning
+models tend to fail in two specific ways. They paraphrase content anchors instead of
+quoting the screenplay verbatim, and the boundary rejects those. And they
+under-decompose scenes, producing coverage that does not hold up. Because
+`propagate_change` and the generation paths are billable and gated, weak reasoning
+costs money as well as quality.
+
+The offline `genvid-article50-readiness` scan is the exception: it drives no boundary
+tool and has no model requirement.
 
 ## Connecting your agent to a Genvid boundary
 
