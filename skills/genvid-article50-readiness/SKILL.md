@@ -95,6 +95,15 @@ signed manifest and a missing on-screen disclosure is a real, common failure
 state, and the tool reports it as one rather than letting the manifest paper
 over it.
 
+**The Article 50(2) transitional period is not in the Regulation as adopted.**
+Generative systems placed on the market before the application date have a
+transitional period for the 50(2) marking and detection obligations only, ending
+`2026-12-02`. That date comes from the Digital Omnibus on AI, the instrument
+amending Regulation (EU) 2024/1689 — not from the Regulation itself — so the
+report prints it with its source beside it, in `scope.article_50_2_transition_source`
+and in the limits. Whether the transition reaches any given system is a question
+about the system, not about these files.
+
 **Article 50(4) is two subparagraphs reaching different material.** The first
 covers *image, audio or video* content constituting a deep fake. The second
 covers AI-generated *text* published to inform the public on matters of public
@@ -119,11 +128,23 @@ python3 article50_scan.py /path/to/production --json - --gaps /dev/null | jq '.c
 
 Exit status is `0` when every file was read and no gaps were recorded, `1` when
 at least one gap was, and `2` when the scan could not run or could not finish —
-a bad path, an unreadable declaration, a read budget below 1, or artifacts that
-could not be delivered. That last case covers stdout as well as files: a write
-that fails, a broken pipe included, exits `2` rather than `1`, on every output
-path including the bare command above. That makes it usable as a delivery gate
-in CI; add `--exit-zero` when you want the report without failing the build.
+a bad path, an unreadable declaration, a read budget below 1, two artifacts
+routed to one destination, or artifacts that could not be delivered. That last
+case covers stdout as well as files: a write that fails, a broken pipe included,
+exits `2` rather than `1`, on every output path including the bare command
+above. That makes it usable as a delivery gate in CI; add `--exit-zero` when you
+want the report without failing the build.
+
+Two artifacts cannot share one destination, and asking for that is refused
+before the scan runs rather than resolved silently. `--json PATH --gaps PATH`
+would have written the report and then overwritten it with the gap list, while
+still reporting both as written; `--json - --gaps -` would have concatenated
+JSON and Markdown onto one stream, which parses as neither. Both exit `2` naming
+the two flags. The check is on where the bytes land, so it also catches a path
+that repeats one of the two names `-o` writes, and two spellings of one file.
+Sending an artifact to `/dev/null` is not a collision — it keeps no bytes to
+overwrite — which is why the piping example above discards the gap list that
+way.
 
 What a `2` cannot tell you is that a consumer read the report. A gap list small
 enough for the kernel's pipe buffer is accepted in full before a reader that
@@ -148,6 +169,25 @@ whether or not it can be read, exactly as a readable one is; a stale scratch
 symlink nobody declared is not reported, because the scan never claimed to cover
 it. Declare the path or pass `--include-other` if you want it accounted for.
 
+These are the recognized media extensions, by the modality each one implies. The
+modality is a guess from the extension, not a determination about the work, and
+it is what routes an asset to the Article 50(4) subparagraph it is read under —
+so an asset delivered under an extension in a different family is assessed under
+a different duty. Anything not listed here is out of scope unless your
+declaration names it or `--include-other` is passed. The tables are checked
+against the scanner's own sets by the test suite, so they cannot drift from what
+the tool actually scans.
+
+<!-- extension-scope:start -->
+
+| Family | Extensions | What the modality routes to |
+| --- | --- | --- |
+| image | `.avif`, `.bmp`, `.dng`, `.exr`, `.gif`, `.heic`, `.heif`, `.jpe`, `.jpeg`, `.jpg`, `.png`, `.tga`, `.tif`, `.tiff`, `.webp` | Article 50(4) deep-fake disclosure; content credentials and IPTC digital source type |
+| video | `.avi`, `.m4v`, `.mkv`, `.mov`, `.mp4`, `.mpeg`, `.mpg`, `.mxf`, `.webm` | Article 50(4) deep-fake disclosure; content credentials in BMFF containers |
+| audio | `.aac`, `.aif`, `.aiff`, `.flac`, `.m4a`, `.mp3`, `.oga`, `.ogg`, `.opus`, `.wav` | Article 50(4) deep-fake disclosure |
+| text | `.fountain`, `.htm`, `.html`, `.md`, `.rtf`, `.srt`, `.txt`, `.vtt` | Article 50(4) public-interest text disclosure; never a deep fake |
+<!-- extension-scope:end -->
+
 One carve-out sits ahead of all three, and it is a directory rule rather than a
 file rule. The scan never descends into `.git`, `.svn`, `.venv`, `venv`,
 `node_modules`, `__pycache__` or `.DS_Store`, wherever in the tree they appear:
@@ -168,12 +208,29 @@ different repair from a path that names nothing. This includes the scan root
 itself, which can be listable enough to open but not to read.
 
 Other options: `--declaration PATH` when the declaration lives outside the
-scanned directory (relative and absolute paths behave identically, and the
-declaration is never scanned as an asset of the production it describes),
+scanned directory (relative and absolute paths behave identically, the
+declaration is never scanned as an asset of the production it describes, and a
+path that exists but is not a file — a directory, most often — is reported as
+what it is rather than as missing),
 `--include-other` to assess files whose extension is not a recognized media
 type, and `--max-bytes N` to widen the per-end read budget for very large
 containers. `--max-bytes` is a budget, not an unlimited switch: `0` is rejected
 rather than run as a scan that reads nothing.
+
+The budget bounds **every** read of an asset, the hash pass included, so scan
+cost tracks the budget rather than the footage sitting on disk. That is what
+makes the tool usable as a delivery gate over a directory of MOV or MXF: each
+asset costs at most two reads of `--max-bytes`, whether it is 6 MB or 600 GB.
+
+The digest follows from that. Each asset record carries
+`sha256_scanned_regions` — a SHA-256 over exactly the bytes read — and
+`sha256_covers`, which names the region it covers in the same words as
+`signals.scan_coverage`. For any asset at or under `2 x --max-bytes` the whole
+file was read, so the value is byte for byte what `sha256sum` prints and works
+as an identity anchor. Above that it is a digest of the two scanned regions:
+a fingerprint of the evidence the record rests on, **not** a checksum of the
+deliverable, and it will not match one. The field is named for what it covers
+so that no consumer has to infer which of the two it is holding.
 
 ## What it reads
 
@@ -312,8 +369,23 @@ included. It changes what a renderer obeys, not what the report records.
 
 ## Reading the gap list
 
-Gaps carry a stable `id`, a severity, the Article 50 paragraph they bear on, and
-a remediation. The ones that matter most in practice:
+Gaps carry a stable `id`, a severity, the Article 50 paragraph they bear on
+(`reference`), the instrument they rest on (`basis`), and a remediation.
+
+`basis` is `statutory` or `code-of-practice`, and it is on every gap. It answers
+a question `reference` does not: whether the finding rests on the Regulation or
+on a voluntary code. `reference` names the paragraph a finding *rides on*, so
+`second-marking-layer-unevidenced` — sourced entirely to the voluntary
+Transparency Code of Practice — carries the same `Article 50(2)` that
+`machine-readable-marking-absent` carries, and filtering by reference alone
+cannot separate a duty the Regulation writes from a practice a code recommends.
+`statutory` means the finding is raised under the Article 50 regime that
+`reference` names; it does not mean the Regulation writes a duty in the gap's
+own words (nothing in it mandates a declaration file, and the declaration-hygiene
+gaps below are this tool's, raised so a duty is not left unchecked). If your
+gate blocks only on what is binding, filter on `basis == "statutory"`.
+
+The ones that matter most in practice:
 
 - `machine-readable-marking-absent`. The asset reads as generated or
   manipulated but carries nothing a downstream reader could detect it by. This
@@ -363,7 +435,10 @@ a remediation. The ones that matter most in practice:
   strips. This tool cannot detect a watermark, so it reports only that no
   evidence of one reached it; record yours in the declaration's `watermark`
   field and the gap closes. It rides on the same 50(2) duty as the two above, so
-  a declared `assistive_editing` lifts it too.
+  a declared `assistive_editing` lifts it too — but it is the one gap whose
+  `basis` is `code-of-practice`, because the two-layer expectation is the code's
+  and not the Regulation's. A gate that blocks only on binding obligations
+  should filter it out on `basis`, not on `reference`.
 - `origin-undetermined`. Nothing states whether the file was generated or
   captured, and no declaration entry covers it. Usually the largest bucket on a
   first run, and the one that has to shrink before the rest of the report means
@@ -381,8 +456,16 @@ a remediation. The ones that matter most in practice:
 - `deep-fake-disclosure-absent`. Declared a deep fake with no disclosure
   wording recorded. Where the work is evidently artistic, creative, satirical or
   fictional, Article 50(4) narrows the duty to a form that does not hamper the
-  work's display. It does not remove it. A declared `assistive_editing` does not
-  reach this one either: that exception belongs to 50(2).
+  work's display. It does not remove it. Which of the two the remediation states
+  follows the declared `artistic_work` for the asset (or its production), so an
+  operator who never claimed the carve-out is not offered it and one who did is
+  told what it bought them. The 50(4) first-subparagraph record in
+  `obligations_engaged` carries the same reading as `narrowed_by_artistic_work`,
+  and its `requirement` text is the narrowed or the unnarrowed duty accordingly.
+  The narrowing is recorded and never verified — whether a work is evidently
+  artistic is a judgement about the work, not about its bytes — and it changes
+  the *form* of the duty only. A declared `assistive_editing` does not reach
+  this one either: that exception belongs to 50(2).
 - `production-disclosure-statement-absent`. The production declares deep fakes
   and the disclosure wording is missing for at least one of them. Disclosure is
   the duty Article 50(4) writes, and the scan reads it at both levels the

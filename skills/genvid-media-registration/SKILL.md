@@ -12,6 +12,8 @@ A studio points you at a directory of files that already exist in its own storag
 
 This is the registered residency tier. Genvid records a registry entry at the `registered` attestation tier: the claim is signed, the bytes are never verified. It is the honest, day-one-frictionless way to bring an existing catalog under governance — the same index-in-place pattern a storage-gateway appliance provides, except it runs as this skill inside your own agent, so no appliance has to be deployed. The division of labor is deliberate: **you compute identity and proxies locally and reason over them; Genvid governs and certifies the binding.** Exact-duplicate grouping and provenance chaining are reliable precisely because the skill computes them locally and hands the boundary the result.
 
+**Scope note:** this archival-only / no-generation-record rule applies to the **bytes** tiers this skill drives — `registered` (above) and `connected`. It does not extend to the **platform** residency tier, where no party — not the customer, not Genvid — ever holds bytes to hash: a platform-custodied asset (e.g. a Roblox `rbxassetid://`) has no ingest path through this skill at all. Platform-tier capture is out of scope for this skill — see `genvid-roblox-character-generation`.
+
 This skill drives two tools — `register_media` (reserve + get a proxy upload URL) and `finalize_media_registration` (record the claim once the proxy is uploaded). Together they are the sibling of `ingest_generated_media`: same backend path, different attestation. Use `ingest_generated_media` only for media you **just generated** (it carries a generation record — model, prompt, params — signed at the `verified` tier). Use this registration pair for an **existing / archival** file (hash, fingerprint, metadata; no generation record — one would be unverifiable). Never dress up an old file as a fresh generation, and never register through `ingest_generated_media`.
 
 ---
@@ -35,6 +37,8 @@ For each file, compute and record:
 - **Technical metadata** — `mime_type` (IANA type of the original), `size_bytes`, and, for time-based media, `duration_seconds` and start `timecode`. Read these from the file, not from its name.
 - **Embedded C2PA manifest** — if the file already carries a content-credential manifest, read it and keep it as a JSON-object string. You will chain it, not discard it (Step 4).
 - **A local proxy** — generate a small viewable thumbnail or keyframe with a local tool (`ffmpeg` for video/audio, an image resize for stills). This is the ONLY media Genvid will store; the original never moves. Keep proxies small (a few hundred KB).
+  - **For a 3D model, make the proxy GEOMETRY, not a flat image.** Export a **reduced** `.glb` or `.fbx` (decimate the mesh; drop or downscale textures) with your local DCC or `blender --background`. Genvid's 3D viewer renders a geometry proxy, so a reviewer can orbit the model instead of squinting at a flat render — an image proxy for a mesh is accepted but leaves the viewer with nothing to rotate. Keep it under **40 MB**; parse cost tracks vertex count, not bytes, so decimate rather than merely re-compressing.
+  - **The proxy must be DERIVED, never the original file.** For ANY original — image, video, dialog, or model — a proxy byte-identical to the original is **rejected at finalize**, whatever you name it, since the check reads the bytes, not the extension. Re-uploading an image original as its own proxy is the commonest way to trip this: it makes a perfect preview, and that is exactly the problem. If finalize refuses your proxy, PUT the corrected bytes to the same `proxy_upload_url` and finalize again — the refused call wrote nothing and the registration is still pending. The `registered` tier's promise is that Genvid never holds the original bytes; uploading them as "the proxy" would make that false while the row still says `registered`. If you actually want Genvid to hold the original, that is a `managed` **upload**, **not a registration** — a different call on a different write surface.
 
 Record all of this as a local **extraction table**, one record per file. You reason over this table in Step 2 — hashes and provenance flags come from here, never from a filename alone.
 
@@ -99,11 +103,12 @@ For each approved `bind` file, register it in **three steps**, binding it to the
 | `shot_id` *or* `asset_id` | The anchor — provide **exactly one** |
 | `filename` | The **original's** display filename (its extension sets `media_type`) — not a Genvid path; the original lives offsite |
 | `mime_type` | IANA MIME type of the original |
-| `proxy_filename` | Filename for the proxy (its extension sets the proxy's content type) |
+| `proxy_filename` | Filename for the proxy — its extension sets the proxy's content type. Images (`.jpg/.jpeg/.png/.gif/.webp`) work for any original; for a **model** original prefer a geometry proxy (`.glb`/`.fbx`) so the 3D viewer can render it. Geometry is rejected for a non-model original. |
+| `kind` | **Model originals only.** What the artifact IS: `animation-clip` for a rig animation (a published Roblox KeyframeSequence, a retargeted clip) or `mesh` for geometry. Declare it — `media_type` cannot express this, because mesh, rig and pose data deliberately share the one `model` type. Without it a clip is indistinguishable from the mesh beside it on the same cast member, and the viewer describes it as a model. Omit for image/video/dialog originals. |
 
 **Step 4b — upload the proxy directly.** PUT the small locally-generated proxy bytes to the returned `proxy_upload_url` — a plain multipart HTTP PUT (field name `file`), exactly like `curl -X PUT "$proxy_upload_url" -F "file=@proxy.jpg"`. The bytes go straight to storage; they never pass through the model or a tool call. The URL already embeds the upload token in its query string, so no auth header is needed.
 
-**Step 4c — `finalize_media_registration` (record the claim).** Hand Genvid the full claim; it verifies the proxy landed, records the registry entry at the `registered` tier, and binds the anchor.
+**Step 4c — `finalize_media_registration` (record the claim).** Hand Genvid the full claim; it verifies the proxy landed, records the registry entry at the `registered` tier, and binds the anchor. Your proxy is also checked against your `content_hash` here, whatever the original's media type — if the two match, the upload was the original rather than a derived artifact, and the call fails.
 
 | Parameter | What to supply |
 |---|---|

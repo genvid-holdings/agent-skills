@@ -21,6 +21,7 @@
 | `verify_media` | additive | live | `project_id`, `media_id`, `content_hash`, `locator`, `locator_type` | genvid-media-registration |
 | `connect_media` | additive | live | `project_id`, `media_id`, `locator`, `connection_name` | genvid-media-registration |
 | `approve_media` | destructive | live | `project_id`, `media_id`, `selection_status` |  |
+| `record_approved_corrections` | destructive | live | `project_id`, `asset_id`, `target`, `stage`, `media_id`, `link_type`, `payload`, `note` |  |
 | `export_provenance_report` | read_only | live | `project_id`, `format` |  |
 | `production_read` | read_only | live | `method`, `project_id`, `resource_type`, `resource_id`, `assigned_to`, `task_type`, `generation_type`, `model_id` | genvid-agent-generation |
 | `production_write` | destructive | live | `method`, `project_id`, `resource_type`, `resource_id`, `task_type`, `assigned_to_email`, `workflow_status`, `priority` | genvid-agent-generation |
