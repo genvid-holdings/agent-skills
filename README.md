@@ -125,11 +125,11 @@ brew install genvid-holdings/genvid/genvid   # macOS/Linux (Homebrew)
 curl -fsSL https://github.com/genvid-holdings/genvid-cli/releases/latest/download/install.sh | sh
 ```
 
-On Windows, download `genvid_<version>_windows_amd64.zip` (or `_arm64`) from the
-[releases page](https://github.com/genvid-holdings/genvid-cli/releases), extract
-`genvid.exe` to a folder on your `Path` (for example `%LocalAppData%\Programs\genvid`),
-and run `Unblock-File` on it, because the binary is not yet code-signed. A ready-to-paste
-PowerShell recipe is in the [CLI README](https://github.com/genvid-holdings/genvid-cli#install).
+On Windows (PowerShell):
+
+```powershell
+irm https://github.com/genvid-holdings/genvid-cli/releases/latest/download/install.ps1 | iex
+```
 
 Then log in once (browser OAuth, same identity as your MCP connection):
 
