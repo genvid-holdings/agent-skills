@@ -104,11 +104,13 @@ For each approved `bind` file, register it in **three steps**, binding it to the
 | `filename` | The **original's** display filename (its extension sets `media_type`) — not a Genvid path; the original lives offsite |
 | `mime_type` | IANA MIME type of the original |
 | `proxy_filename` | Filename for the proxy — its extension sets the proxy's content type. Images (`.jpg/.jpeg/.png/.gif/.webp`) work for any original; for a **model** original prefer a geometry proxy (`.glb`/`.fbx`) so the 3D viewer can render it. Geometry is rejected for a non-model original. |
+| `storage_class` | The residency class this registration lands at: `registered` (the tool's default) or `connected`. **Not a neutral default** — pick it deliberately, per the residency section below. `platform` is accepted by the tool too, but is **not produced by this skill** — see the scope note above. `managed` is rejected on this surface. |
+| `connection_name` | **`connected` only.** The org storage connection reaching the original. Optional when the org has exactly one enabled connection. Genvid only scope-checks it here and **resolves it at finalize** — pass the same value again in step 4c. |
 | `kind` | **Model originals only.** What the artifact IS: `animation-clip` for a rig animation (a published Roblox KeyframeSequence, a retargeted clip) or `mesh` for geometry. Declare it — `media_type` cannot express this, because mesh, rig and pose data deliberately share the one `model` type. Without it a clip is indistinguishable from the mesh beside it on the same cast member, and the viewer describes it as a model. Omit for image/video/dialog originals. |
 
-**Step 4b — upload the proxy directly.** PUT the small locally-generated proxy bytes to the returned `proxy_upload_url` — a plain multipart HTTP PUT (field name `file`), exactly like `curl -X PUT "$proxy_upload_url" -F "file=@proxy.jpg"`. The bytes go straight to storage; they never pass through the model or a tool call. The URL already embeds the upload token in its query string, so no auth header is needed.
+**Step 4b — upload the proxy directly.** PUT the small locally-generated proxy bytes to the returned `proxy_upload_url` — a plain multipart HTTP PUT (field name `file`), exactly like `curl -X PUT "$proxy_upload_url" -F "file=@proxy.jpg"`. The bytes go straight to storage; they never pass through the model or a tool call. The URL already embeds the upload token in its query string, so no auth header is needed. At the `connected` tier this PUT is **optional** — Genvid generates a proxy server-side from the original when you omit it.
 
-**Step 4c — `finalize_media_registration` (record the claim).** Hand Genvid the full claim; it verifies the proxy landed, records the registry entry at the `registered` tier, and binds the anchor. Your proxy is also checked against your `content_hash` here, whatever the original's media type — if the two match, the upload was the original rather than a derived artifact, and the call fails.
+**Step 4c — `finalize_media_registration` (record the claim).** Hand Genvid the full claim; it verifies the proxy landed, records the registry entry at the class the registration was initialized to, and binds the anchor. Your proxy is also checked against your `content_hash` here, whatever the original's media type — if the two match, the upload was the original rather than a derived artifact, and the call fails.
 
 | Parameter | What to supply |
 |---|---|
@@ -125,6 +127,8 @@ For each approved `bind` file, register it in **three steps**, binding it to the
 | `locator` | Path/key of the original **relative to the customer storage root** (a SAN path or S3 key) — never a Genvid path |
 | `locator_type` | `customer_path` (SAN) or `customer_s3` |
 | `pre_signed_c2pa_manifest` | The original's embedded C2PA manifest as a JSON-object string, **if** you read one — chained by reference, never re-rooted. Omit when there is no manifest |
+| `storage_class` | The **same** class step 4a was initialized at — read it off `register_media`'s response rather than re-deciding. A finalize that declares a different class than init is rejected. |
+| `connection_name` | **`connected` only.** The org storage connection reaching the original — this is where Genvid resolves it. Optional when the org has exactly one enabled connection. |
 | `input_media_ids` | Existing Genvid media IDs that are provenance inputs (rare for an archival original; usually empty) |
 
 ### Mapping a proposed anchor to the register_media call
@@ -143,7 +147,31 @@ For each approved `bind` file, register it in **three steps**, binding it to the
 
 ### What the tool is classified as
 
-Both `register_media` and `finalize_media_registration` are `additive`: they add a new registry media + link without overwriting or removing anything, and without spending. Your own request to register this directory is the authorization; your MCP client does not prompt for an additive call. The proxy bytes go straight to storage over the signed upload URL (never through a tool call), and the media appears bound to its anchor — at the `registered` tier — as soon as `finalize_media_registration` returns.
+Both `register_media` and `finalize_media_registration` are `additive`: they add a new registry media + link without overwriting or removing anything, and without spending. Your own request to register this directory is the authorization; your MCP client does not prompt for an additive call. The proxy bytes go straight to storage over the signed upload URL (never through a tool call), and the media appears bound to its anchor — at the attestation tier its residency class implies (`registered` for the registered tier, `verified` for `connected`) — as soon as `finalize_media_registration` returns.
+
+---
+
+## Residency class: what this skill produces, and what to disclose
+
+The residency class is a **choice, not a neutral default**. `register_media` accepts a `storage_class`, and an agent that omits it silently accepts `registered` — the tier whose hash is a customer claim Genvid has never verified.
+
+**This skill produces `registered` or `connected`. It cannot produce `managed`, and platform-tier capture is out of scope (see the scope note above).** The register surface rejects `managed` outright, because "Genvid holds the original bytes" is an **upload**, not a registration. So when an organization's residency posture *defaults* to `managed`, that default **cannot** be honoured on this path — the registration lands at `registered` instead. That is the correct outcome for a file Genvid never receives. It is not an outcome you may leave unsaid.
+
+Resolve the class with the human before you register, rather than assuming:
+
+- **The originals stay in customer storage, unread by Genvid** → `registered`.
+- **The originals sit in an org storage connection Genvid can reach** → `connected` (name it with `connection_name`, and supply a `customer_s3` locator at finalize). Genvid streams the bytes once, verifies your `content_hash` against them, and the media certifies at the **verified** tier — strictly stronger than `registered`. Prefer it whenever such a connection exists.
+- **The artifact is platform-custodied and no party can hash it** → the `platform` tier, which this skill does not drive — see `genvid-roblox-character-generation`. Say so and stop.
+- **Genvid should hold the originals** → that is a **managed upload** on a different write surface, not a registration. Say so and stop; do not register a downscaled proxy in its place.
+
+### Report what you produced (mandatory)
+
+When you finish registering, **state the residency class each media landed at, and say plainly what happened to the original files.** The proxy you uploaded is what the Asset Manager displays, so a user who expected Genvid to hold their originals otherwise sees only downscaled images, carrying an attestation tier they never chose, with no explanation for either.
+
+- Report the class per media, or per batch when it is uniform.
+- For `registered`, say the **originals were never uploaded and stayed on the human's machine** — Genvid holds the proxy and your signed claim, nothing more, and the hash it recorded is your claim rather than a verification.
+- For `connected`, say the originals stayed in the customer's own storage and that Genvid read them **transiently, once**, to verify the hash — it does not retain them.
+- If you registered on an account whose posture default is `managed`, say that the default could not be honoured on this path, and name the managed upload as the alternative.
 
 ---
 
@@ -151,7 +179,7 @@ Both `register_media` and `finalize_media_registration` are `additive`: they add
 
 Genvid signs the **claim** you registered — the hash, the fingerprint, the technical metadata, the binding, and (chained by reference) any embedded C2PA manifest — at the `registered` attestation tier. It does **not** verify the bytes, because it never held them: the tier's whole premise is that the original stays in your storage.
 
-Said plainly: a registered media's hash is a **customer claim**, honestly labeled as such. That label travels in the registry claim and on any certification of registered media. If a studio later wants **verified-tier** certification for a specific asset, that is the moment Genvid must touch bytes to sign at full strength — the asset is flipped to the connected tier, or its bytes are handed over once, transiently, at approval time. Capture and registration never require the bytes; certification at full strength does. Keeping that two-tier distinction visible is the point — a registered claim that is quietly treated as verified would be a silent hole in the trust model.
+Said plainly: a registered media's hash is a **customer claim**, honestly labeled as such. That label travels in the registry claim and on any certification of registered media. If a studio later wants **verified-tier** certification for a specific asset, that is the moment Genvid must touch bytes to sign at full strength. Reaching that tier is either an upfront choice — register at `storage_class: connected`, where Genvid streams and hash-verifies the original once at finalize — or a later flip of an already-`registered` asset at approval time. A `registered` capture never requires the bytes; certification at full strength does. Keeping that two-tier distinction visible is the point — a registered claim that is quietly treated as verified would be a silent hole in the trust model.
 
 ---
 
