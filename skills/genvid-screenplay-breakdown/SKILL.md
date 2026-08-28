@@ -44,7 +44,46 @@ screenplay_read(method=<method>, project_id=<project_id>)
 
 Read each scene's `text` and decide, with your own judgment, which assets it introduces — cast members, locations, props, costumes, vehicles, and so on. This is the part that needs taste: the screenplay names some entities explicitly and implies others, and you decide what is worth tracking as a production asset.
 
-For each asset, create a record:
+### Reconcile before you create
+
+A project usually already has assets before breakdown runs — most often because the
+show bible was ingested first, and **those** are the assets carrying the user's
+reference images. If you author a second copy, the shots you link later point at
+your copy, which has no media, and the user's references sit orphaned on a
+duplicate the production never uses.
+
+So read what already exists first:
+
+```
+assets_read(method="list", project_id=<project_id>)
+```
+
+Match each asset you are about to author against that list by name and type, and
+reuse the existing `asset_id` when it is the same entity. Names differ
+cosmetically — the bible's `The Boy` and your `Boy` are one character.
+
+The boundary enforces this as a backstop. `assets_write` create and create_batch
+reconcile against the project's existing assets before writing:
+
+- **Name and type match an existing asset** — the call attaches to it and returns
+  that asset's `asset_id` with `matched_existing: true`. Nothing is duplicated.
+- **`cast_member` and `extra` on the same name** — these two are one identity,
+  not a clash: `cast_member` is a superset of `extra` (it carries every slot
+  `extra` does, plus dialog). An arriving `extra` that matches an existing
+  `cast_member` (say `Hermit Crab`) just attaches to it. An arriving
+  `cast_member` that matches an existing `extra` attaches to it AND upgrades
+  it to `cast_member` — it gains the dialog slot, loses nothing. The reverse
+  never happens automatically: an existing `cast_member` is never downgraded
+  to `extra`, since that could orphan dialog media — only a human decides that.
+- **Any other cross-type clash is ambiguous** — the same name under a
+  different, non-superset type (`Beach` as both `location` and `prop`), or a
+  near-name variant of the same type (`Beach Shoreline` against an existing
+  `Beach`) — the call is rejected and names the candidates. Nothing is
+  written. Resolve it: reuse the existing asset, correct its type with
+  `method="update"`, or, if it genuinely is a distinct asset, re-send with
+  `allow_duplicate=true`.
+
+For each asset that is genuinely new, create a record:
 
 ```
 assets_write(method="create", project_id=<project_id>, name=<name>, asset_type=<type>, description=<optional>)
@@ -56,7 +95,7 @@ assets_write(method="create", project_id=<project_id>, name=<name>, asset_type=<
 | `asset_type` | One of: `cast_member`, `location`, `prop`, `costume`, `inspiration`, `extra`, `set_dressing`, `makeup_hair`, `vehicle`, `livestock`, `greenery` |
 | `description` | Optional — a short description of the asset |
 
-`assets_write(method="create")` is **additive** — it adds new state without overwriting or spending, so it runs freely (see `genvid-boundary-gate`). Use `method="update"` with an `asset_id` to revise an asset you already created.
+`assets_write(method="create")` is **additive** — it runs freely, without a gate prompt (see `genvid-boundary-gate`). The one write it can trigger against an asset that already exists — the `extra` -> `cast_member` upgrade above — is a lossless superset change, not an overwrite or a spend, so it stays additive too. Use `method="update"` with an `asset_id` to revise an asset you already created some other way.
 
 ---
 
