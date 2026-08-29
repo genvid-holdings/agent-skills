@@ -157,6 +157,16 @@ The residency class is a **choice, not a neutral default**. `register_media` acc
 
 **This skill produces `registered` or `connected`. It cannot produce `managed`, and platform-tier capture is out of scope (see the scope note above).** The register surface rejects `managed` outright, because "Genvid holds the original bytes" is an **upload**, not a registration. So when an organization's residency posture *defaults* to `managed`, that default **cannot** be honoured on this path — the registration lands at `registered` instead. That is the correct outcome for a file Genvid never receives. It is not an outcome you may leave unsaid.
 
+### Read the org's posture before you choose (mandatory)
+
+`discovery_read(method: 'get_residency_policy')` returns this organization's configured residency posture — `default_storage_class`, `allowed_storage_classes`, and `register_surface_classes` (what `register_media` can actually produce). **Call it before your first `register_media`, and read the class you are about to request against what it tells you.** Without it you are guessing at a value the org has actually configured, and you will not be able to name it when you report.
+
+Three things it settles:
+
+- **The org default is `registered` or `connected`** → request that class. The posture is honoured, and there is nothing exceptional to disclose beyond the normal report below.
+- **The org default is `managed`** → it is NOT in `register_surface_classes`, and registering here is a **deliberate exception** to the posture the org configured. Register only if the human wants these files indexed in place; say plainly that the account's default is `managed` and that this path cannot produce it.
+- **The class you want is missing from `allowed_storage_classes`** → do not call `register_media` hoping it lands somewhere. The write seam rejects it server-side, naming the policy. Take that to the human instead of retrying at a weaker class.
+
 Resolve the class with the human before you register, rather than assuming:
 
 - **The originals stay in customer storage, unread by Genvid** → `registered`.
@@ -171,7 +181,7 @@ When you finish registering, **state the residency class each media landed at, a
 - Report the class per media, or per batch when it is uniform.
 - For `registered`, say the **originals were never uploaded and stayed on the human's machine** — Genvid holds the proxy and your signed claim, nothing more, and the hash it recorded is your claim rather than a verification.
 - For `connected`, say the originals stayed in the customer's own storage and that Genvid read them **transiently, once**, to verify the hash — it does not retain them.
-- If you registered on an account whose posture default is `managed`, say that the default could not be honoured on this path, and name the managed upload as the alternative.
+- **Name the org's configured default.** Read it from `discovery_read(method: 'get_residency_policy')` and quote the actual value — "this account's residency default is `managed`" — rather than describing the situation in the abstract. If that default is one the register surface cannot produce (`managed`), say that registration is a deliberate exception to it on this path, and name the managed upload as the alternative surface.
 
 ---
 
