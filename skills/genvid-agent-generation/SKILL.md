@@ -37,6 +37,14 @@ Do this as ONE `create_assignment` call per resource, not a separate assign-then
 
 ---
 
+## Step 0b — Check the budget before you spend your own money (required, every generation)
+
+You generate with your OWN provider and your OWN key — Genvid never sees the charge, so it can't stop you before you spend. Before generating, check whether your provider's own price fits what the project (and, for an asset generation, the asset) has left: `production_read(method="check_generation_budget", project_id=..., estimated_cost_usd=<your provider's price for this generation>, asset_id=<the asset_id, only when generating for an asset>)`. If the response's `fits` is `false`, **stop — do not generate** — and quote the `refusal` sentence back to the user; it names the budget, what's already spent, and what this generation would have cost. `production_read` is read-only, so this costs nothing and your client does not prompt for it. This is required for every generation, the same register as Step 0 — not a courtesy check to skip when you're confident it'll fit.
+
+This is a genuine check, not a formality: unlike Step 0's task claim, `check_generation_budget` can tell you not to proceed, and the reason matters — Genvid's own read of `total_spent` is honest only when every prior bind attested its cost (see the bind step below), so a `fits: true` here is only as good as the attestations that came before it.
+
+---
+
 ## Step 1 — Generate with your own provider
 
 **Preflight — confirm your provider is wired.** Before generating, confirm a provider is wired into your client. If none is wired yet, wire the provider's own MCP server (such as FAL's) now — Genvid never sees the key.
@@ -61,7 +69,8 @@ How you bind depends on **what your generator produced** — a hosted URL, or a 
 genvid import-generated-media <project-id> -c multipart \
   'rendered_output: @/path/to/image.png, model_provider: openai,
    model_name: codex-built-in-imagegen, render_type: T2I,
-   link_type: shot_firstframe, shot_id: <shot-id>, params: {}'
+   link_type: shot_firstframe, shot_id: <shot-id>, params: {},
+   attested_cost_amount: 0.04, attested_cost_currency: USD'
 ```
 
 The `@` prefix streams the file itself — full resolution, byte-for-byte, signed exactly as written. This is the **only** lossless path for a locally-generated file, and it takes the same provenance fields as the MCP tool (same route, same attestation, same task-claim gate from Step 0). Install once with `brew install genvid-holdings/genvid/genvid` (or the install script; on Windows, the zip from the [releases page](https://github.com/genvid-holdings/genvid-cli/releases)) and log in through your browser on first use.
@@ -82,8 +91,10 @@ The `@` prefix streams the file itself — full resolution, byte-for-byte, signe
 | `params` | The params you used, as a JSON object string (e.g. `{"seed": 7, "steps": 4}`) |
 | `input_media_ids` | Optional: existing Genvid media ids you used as references/inputs — recorded as signed ingredient provenance |
 | `input_link_type` | How those inputs contributed, as a `media_media_link_type_enum` value: `firstframe_source_image` for I2I first-frame composition (the usual case), `edited_from` for an edit, `reference_image` for style/guidance only. Drives the C2PA action and the certified-inputs roll-up. Omit to accept the default (`firstframe_source_image`). |
+| `attested_cost_amount` | **Required.** What this generation just cost YOU at your own provider — the figure from the provider's own response, e.g. `0.04`. Genvid never sees your key and cannot observe this; it is recorded as your attestation. Pass `0` for a genuinely free generation — that is a real claim, not the same as omitting the field, which records the cost as UNKNOWN and understates the project's spend for everyone reading it. |
+| `attested_cost_currency` | **Required with `attested_cost_amount`.** ISO 4217 code for what you were actually charged (e.g. `USD`, `EUR`) — declare the real currency, don't convert it yourself. Only `USD` counts toward the project's budget math; any other currency is still signed into the manifest and recorded on the media, just not summed (Genvid holds no exchange rate). |
 
-`ingest_generated_media` is classified `additive`: it adds a new media and link alongside whatever is already there, without overwriting or removing anything and without incurring cost. Your own request to generate for this asset is the authorization, and your client does not prompt to allow an additive call. The media appears bound to the target as soon as the call returns.
+`ingest_generated_media` is classified `additive`: it adds a new media and link alongside whatever is already there, without overwriting or removing anything. Your own request to generate for this asset is the authorization, and your client does not prompt to allow an additive call. The bind never refuses on budget — it always persists what you generated — but read the response's `budget_status` back rather than assuming success means it fit: `evaluated` is false (with a `reason`) when you omitted the cost or attested a non-USD currency; `exceeded` is true when this bind pushed the project or the anchored asset over its configured budget. The media appears bound to the target as soon as the call returns.
 
 ---
 
@@ -96,7 +107,7 @@ Composing a shot's first frame is the canonical I2I case: you condition on the s
 3. **Resolve each cast member + the location to its approved image.** `assets_read(method="list", project_id=...)` maps the names from `castMembers`/`location` to `asset_id`s; `assets_read(method="get", asset_id=...)` returns that asset's media. Pick the approved one — if unsure, `media_read` each candidate and prefer `certified: true` (and `c2pa_status: "signed"`). Hold onto each chosen `media_id`.
 4. **Pull the input bytes.** `media_read(project_id=..., media_id=...)` for each chosen image → download its `signed_url` and hand the bytes to your own provider.
 5. **Compose with your own provider** (I2I), conditioning on the cast/location images + the shot direction. Write the prompt yourself from the `shot_direction` you read in step 2 — you hold the production context, so you do not need the boundary to phrase it for you.
-6. **Bind to the shot.** `ingest_generated_media(project_id=..., link_type="shot_firstframe", shot_id=..., render_type="I2I", model_provider=..., model_name=..., prompt=..., params=..., source_url=<provider result url>, input_media_ids=[<the image media_ids>], input_link_type="firstframe_source_image")`. This form is for a **hosted result URL**; if your generator wrote a **local file**, bind it with the `genvid` CLI instead — same fields — `genvid import-generated-media <project-id> -c multipart 'rendered_output: @<path>, link_type: shot_firstframe, shot_id: <shot-id>, render_type: I2I, model_provider: ..., model_name: ..., input_media_ids: [...], input_link_type: firstframe_source_image, params: {}'` (per the URL-vs-local-file split in Step 2).
+6. **Bind to the shot.** `ingest_generated_media(project_id=..., link_type="shot_firstframe", shot_id=..., render_type="I2I", model_provider=..., model_name=..., prompt=..., params=..., source_url=<provider result url>, input_media_ids=[<the image media_ids>], input_link_type="firstframe_source_image", attested_cost_amount=0.04, attested_cost_currency="USD")`. This form is for a **hosted result URL**; if your generator wrote a **local file**, bind it with the `genvid` CLI instead — same fields — `genvid import-generated-media <project-id> -c multipart 'rendered_output: @<path>, link_type: shot_firstframe, shot_id: <shot-id>, render_type: I2I, model_provider: ..., model_name: ..., input_media_ids: [...], input_link_type: firstframe_source_image, params: {}, attested_cost_amount: 0.04, attested_cost_currency: USD'` (per the URL-vs-local-file split in Step 2). The remaining bind examples below (video, dialogue, SFX, music) omit `attested_cost_amount`/`attested_cost_currency` for brevity, but they are **required on every bind** — see the param table above.
 
 The bound first frame is signed and carries `input_certification` — `all_certified` if every cast/location image you used was certified, `mixed`/`none_certified` otherwise. That is the honest record of what you composed from; nothing blocks an uncertified compose, it is just labeled.
 
@@ -140,7 +151,7 @@ Music also shares the shot's **`audio`** task lane — claim it the same way:
 
 Two axes, one concept, same as dialogue: you **claim and bind** on the `audio` lane (`task_type="audio"`, `link_type="shot_sfx"` or `link_type="shot_music"`), and you **price** it on `production_read` as `generation_type="sfx"` or `generation_type="music"`. If the SFX/music derives from a source clip, pass it in `input_media_ids` — it is recorded as a `source_audio` derivation link; text-only T2A/T2M has no input to pass.
 
-Pricing caveat (all lanes): `get_cost_estimate` prices against **Genvid's model catalog** (the response says so in `cost_basis`); since you generate with your own model and key, your actual cost is whatever your provider charges — treat the figure as a catalog-reference planning proxy.
+Pricing caveat (all lanes): `get_cost_estimate` prices against **Genvid's model catalog** (the response says so in `cost_basis`); since you generate with your own model and key, your actual cost is whatever your provider charges, not that catalog figure — treat it as a rough planning proxy only. For a real pre-spend check, use `check_generation_budget` (Step 0b) with YOUR OWN provider's price; for the record of what you actually spent, attest it on the bind (`attested_cost_amount`/`attested_cost_currency`, required — see the param table in Step 2) and read `budget_status` back from the response.
 
 ---
 
