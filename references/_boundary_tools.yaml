@@ -162,13 +162,13 @@
 # record_approved_corrections records (or supersedes) the active
 # per-(target, stage) hand-tuned correction values for an asset, anchored to
 # the exact media approved against (e.g. per-bone posture corrections for a
-# titan mesh, valid only for that mesh). destructive because it supersedes
+# character mesh, valid only for that mesh). destructive because it supersedes
 # any existing active correction for the same axis; history survives via
 # get_approved_corrections_with_state's include_history, not through this
 # tool. payload is a JSON-object-encoded string, not a raw object — the
 # correction's keys are target-defined and dynamic. Deployed to prod 2026-08-19
 # (auto-deploy, apply-migrations green) and witnessed live: four
-# correction rows recorded on the production EFT project, states returned.
+# correction rows recorded on a live project, states returned.
 - name: record_approved_corrections
   classification: destructive
   status: live
@@ -242,10 +242,26 @@
 # implies. method='create_batch' writes many in one call and is the one to use for a
 # breakdown; single 'create' calls are rate-limited. destructive because 'update'
 # overwrites an existing asset's name or description.
+#
+# hero_image_media_id / clear_hero (update only) pin the one picture that represents
+# an asset wherever it is listed, instead of the thumbnail following whatever was
+# generated last.
+#
+# These two red `boundary-contract` until the PR that adds them deploys: that gate
+# smoke-tests this file against the LIVE PROD boundary and requires declared params to
+# be a subset of what prod serves (smoke_test.check_tools). It is not a required check,
+# and it goes green on the next deploy without anyone touching this file. Documenting
+# the fields with the PR that adds them is the deliberate trade — a briefly-red
+# informational check beats a follow-up nobody remembers. `status:` cannot express this
+# (it is per-tool: live / designed / excluded, and assets_write is live).
+# Do not "fix" the red by deleting these. The media must already be linked to the asset, be an image, and have
+# finished generating. Two fields rather than "pass null to clear" because an omitted
+# field and an explicit null are indistinguishable over MCP, and "leave the hero alone"
+# must not be confusable with "delete the hero".
 - name: assets_write
   classification: destructive
   status: live
-  params: [method, project_id, asset_id, name, asset_type, description, assets]
+  params: [method, project_id, asset_id, name, asset_type, description, assets, hero_image_media_id, clear_hero]
   skill: genvid-screenplay-breakdown
 
 # locations_write covers location state, and every method mutates: 'rederive'

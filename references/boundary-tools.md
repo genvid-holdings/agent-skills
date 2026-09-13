@@ -30,7 +30,7 @@
 | `screenplay_read` | read_only | live | `method`, `project_id` | genvid-screenplay-breakdown |
 | `screenplay_write` | destructive | live | `method`, `project_id`, `content`, `message` | genvid-screenplay-breakdown |
 | `assets_read` | read_only | live | `method`, `project_id`, `asset_id`, `asset_type`, `render_type`, `budget_preference`, `shot_complexity`, `max_results` | genvid-agent-generation |
-| `assets_write` | destructive | live | `method`, `project_id`, `asset_id`, `name`, `asset_type`, `description`, `assets` | genvid-screenplay-breakdown |
+| `assets_write` | destructive | live | `method`, `project_id`, `asset_id`, `name`, `asset_type`, `description`, `assets`, `hero_image_media_id`, `clear_hero` | genvid-screenplay-breakdown |
 | `locations_write` | destructive | live | `method`, `project_id`, `scene_id`, `location_id` |  |
 | `scenes_read` | read_only | live | `method`, `project_id`, `scene_id` | genvid-scene-shot-design |
 | `scenes_write` | destructive | live | `method`, `project_id`, `scene_id`, `linked_assets` | genvid-scene-shot-design |

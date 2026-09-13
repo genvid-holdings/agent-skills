@@ -8,6 +8,8 @@ The pack carries no tenant data. Each skill describes how to call the Genvid bou
 
 Two skills are the exception. **`genvid-article50-readiness`** drives no boundary tool at all and runs entirely offline: start there if you have never heard of Genvid. **`genvid-roblox-studio-ops`** drives Roblox Studio directly over its own built-in MCP server, not the Genvid boundary.
 
+**`genvid-roblox-character-generation`** also ships a runnable zero-touch runner (`runner/cli.py`, entry point under that skill's own directory) that drives its plate-to-parked-template chain end to end; see that skill's SKILL.md §7.
+
 ## Article 50 readiness (no account, no network)
 
 Article 50 of the EU AI Act ([Regulation (EU) 2024/1689](https://eur-lex.europa.eu/eli/reg/2024/1689/oj)) applies from **2 August 2026**. It puts transparency duties on the providers and deployers of systems that generate or manipulate media: machine-readable marking of synthetic output, and disclosure of deep fakes.
@@ -149,7 +151,7 @@ The `version` field in `pack.json` is matched to a boundary release via `boundar
 
 ```json
 {
-  "boundary_compat": ">=0.5.0 <0.6.0"
+  "boundary_compat": ">=0.6.0 <0.7.0"
 }
 ```
 
