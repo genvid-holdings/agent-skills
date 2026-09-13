@@ -59,7 +59,7 @@ To resolve one:
 
 If `media_read` can't serve the bytes directly — the media is at the `connected` or `registered` residency tier (see `genvid-media-registration`) — fall back to `resolve_media(project_id, media_id)` to resolve access instead.
 
-No new boundary tool exists for citations — resolution is composed entirely from `media_read` and `shots_read`, both already at boundary v0.5.0.
+No new boundary tool exists for citations — resolution is composed entirely from `media_read` and `shots_read`, both available since boundary v0.5.0.
 
 ---
 

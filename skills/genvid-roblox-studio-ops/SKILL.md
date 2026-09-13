@@ -57,7 +57,7 @@ A first call on a fresh bridge sometimes fails with `"previously active Studio d
 
 **A better pattern for anything non-trivial:** serve the payload as JSON on `localhost` and have the injected Luau `HttpService:JSONDecode` it inside `execute_luau`. This is reported to beat `_G` chunk-streaming for larger payloads.
 
-**Reusable code, flagged for porting rather than reimplementing from scratch:** a stdio MCP client (`pipeline/src/studio/mcp-client.ts`) and a GLB chunk-streaming bridge (`pipeline/src/studio/glb-to-studio.ts`) exist in the retired `roblox-avatar-test` repo. Port from there when a project needs this again instead of re-deriving the streaming approach.
+**Reusable code, flagged for porting rather than reimplementing from scratch:** a stdio MCP client (`pipeline/src/studio/mcp-client.ts`) and a GLB chunk-streaming bridge (`pipeline/src/studio/glb-to-studio.ts`) exist in the retired fal-chain pipeline repo that this knowledge came out of (that repo belongs to the undisclosed production and is not named here). Port from there when a project needs this again instead of re-deriving the streaming approach.
 
 ---
 
@@ -67,6 +67,8 @@ A first call on a fresh bridge sometimes fails with `"previously active Studio d
 |---|---|---|
 | `screen_capture` is **blind to particle effects** | A screenshot-based verdict on any VFX (impact flashes, auras, spell effects) will read as "nothing there" even when it fired correctly. | FX verdicts need a human's eyes on the live viewport — do not trust a screen capture to confirm particle-based effects landed. |
 | Never verify melee/combat by **teleporting the player** into range | `MovementSentry`-style anti-cheat logic flags the teleport and rubber-bands the player back. | Drive the player into range through normal movement (or a scripted approach that respects movement limits), not a `PivotTo`/teleport shortcut. |
+| A server-side METHOD CALL never reaches a client (`ParticleEmitter:Emit`, `Sound:Play` on a server-owned instance, any `:Method()` fired from a Server script or `execute_luau` Server) | Only property writes and events replicate. A death burst emitted server-side looked correct in a Server-datamodel witness (`Enabled` flipped) and rendered on no client (found in code review, fixed 2026-09-10). | Fire a RemoteEvent and call the method on each client; the Server witness proves the event was sent, a Client-datamodel `OnClientEvent` hook proves it arrived. |
+| `Bone.WorldPosition` / `WorldCFrame` ignore the bone's own animated `Transform` | A sampler on them reads a playing clip's root motion as zero and a fall as "nothing moved". | Sample `Bone.TransformedWorldCFrame` (witnessed 2026-09-10). |
 | Cameras framed off the wrong anchor | Rigs frequently have an oddly-placed `HumanoidRootPart`; framing off it puts the subject off-center or out of frame. | Frame off `GetBoundingBox`, as noted above. |
 
 ---
@@ -107,11 +109,35 @@ The conclusion this table supports: **capture generation inputs and outputs (pla
 
 ---
 
-## Importer limits
+## Import and publish paths — what an agent drives, what a human still does
 
-- The 3D Importer reads **geometry and skeletons only** — it does not import animations. Do not expect an animated FBX/GLB import to bring its clips along.
-- **File-import-only ingestion:** there is no MCP tool that performs a "3D file import." A GLB/FBX has to go through the Studio 3D Importer as a manual step; `insert_asset` is a different thing and needs an existing Open Cloud asset ID, not a local file.
-- **Programmatic animation publish stops at a human click.** Whatever automation drives the rest of the pipeline, publishing an animation asset ends at a confirm/pay dialog a human has to click through — budget for that manual step, don't try to script past it.
+Three of the four ways content enters Studio run end to end from the MCP
+bridge with zero clicks; one runs from a script on the host machine; the
+place publish is the only step that is a human's. (An earlier version of
+this section said 3D file imports and animation publishing required a human;
+both were superseded by the paths below.)
+
+| Content | Agent-driven path | Witnessed |
+|---|---|---|
+| A **static mesh** (props, collectibles) | Serve the GLB's buffers over local HTTP (`HttpService.HttpEnabled` set from the bridge, `GetAsync` against `127.0.0.1`), decode in Luau, build an `EditableMesh` (`AddVertex`/`AddUV`/`AddNormal`, `AddTriangle` + `SetFaceUVs`/`SetFaceNormals`; glTF → Roblox = negate Z and reverse winding), `AssetService:CreateAssetAsync(em, Enum.AssetType.Mesh)` — it returns TWO values, `(Enum.CreateAssetResult, assetId)`; capture both — then `CreateMeshPartAsync` (collision fidelity set here) and park the part. Textures ride the same way through `EditableImage`. No dialog. | 2026-09-05 (a whole biome kit), 2026-09-09 (the coin) |
+| An **animation clip** | Build the `KeyframeSequence` IN Studio from poses served over local HTTP, park it under `ServerStorage/Assets/Anims`, then `AssetService:CreateAssetAsync(kfs, Enum.AssetType.Animation, {Name, Description})` from the bridge's Edit context. It returns a real asset id; there is no confirm or pay dialog on this call. An UNPUBLISHED sequence never advances when played, so publishing is not optional. | 2026-09-04 onward; 20+ clips |
+| A **skinned rig** (rigged FBX/GLB with bones) | This one is the 3D Importer, and the Importer has no MCP surface. It IS drivable without a human on macOS: `osascript` opens File → Import (System Events, Accessibility granted to the terminal), the native open panel takes ⌘⇧G + the path + Return, and the Qt "Import" button — which ignores System Events clicks and Return — fires on a real CGEvent from a ~40-line Swift helper compiled with the Xcode toolchain (screen points = screenshot px / 2). The import creates the mesh asset, the packaged texture and an Asset Manager model; the agent then parks the result and, for a re-upload, swaps it into the live template with `MeshPart:ApplyMesh` so no wiring is redone. | 2026-09-10 |
+| The **place** (what players get) | None. Cmd-S saves; only File → Publish to Roblox ships the place, and the bridge cannot do either. Every session ends by telling the human to save and publish. | standing |
+
+Two facts that survive from the old text: the Importer reads geometry and
+skeletons only, never a file's animations (clips come in through the second
+row); and `insert_asset` is not an import — it needs an existing cloud asset
+id, not a local file.
+
+What a human still does, and why:
+- **Save and Publish the place.** No bridge call reaches either menu.
+- **Moderation.** A published mesh can come back MODERATED with no reason
+  shown; Roblox then renders it to its owner only, so the owner's own Play
+  session proves nothing — verify with a non-owner account (witnessed
+  2026-09-10). Re-uploading the same content is moderated again.
+- **Genvid approvals.** Every published mesh and clip is bound as governed
+  media; the reviewer approves or rejects it in Genvid, never the agent.
+- **Accessibility grant** for the scripted Importer path, once per machine.
 
 ---
 

@@ -92,7 +92,7 @@ assets_write(method="create", project_id=<project_id>, name=<name>, asset_type=<
 | Parameter | What to supply |
 |---|---|
 | `name` | The asset's name (for example a character's name, or a location) |
-| `asset_type` | One of: `cast_member`, `location`, `prop`, `costume`, `inspiration`, `extra`, `set_dressing`, `makeup_hair`, `vehicle`, `livestock`, `greenery` |
+| `asset_type` | One of: `cast_member`, `location`, `prop`, `costume`, `inspiration`, `extra`, `set_dressing`, `makeup_hair`, `vehicle`, `livestock`, `greenery`, `music` |
 | `description` | Optional — a short description of the asset |
 
 `assets_write(method="create")` is **additive** — it runs freely, without a gate prompt (see `genvid-boundary-gate`). The one write it can trigger against an asset that already exists — the `extra` -> `cast_member` upgrade above — is a lossless superset change, not an overwrite or a spend, so it stays additive too. Use `method="update"` with an `asset_id` to revise an asset you already created some other way.

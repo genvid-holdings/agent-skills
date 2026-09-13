@@ -16,16 +16,17 @@ This is the bring-your-own-agent path: you run the generation, Genvid governs an
 
 ## Step 0 — Claim the matching task before you generate (required, every generation)
 
-Generating media is a step in a tracked production workflow, not a free action. Whatever you are about to bind — an asset image, a shot's first/last frame or keyframe, a shot's video, a shot's dialogue — that resource's task must be **assigned to you** and **In progress** first, and claiming it is what records that progress. This is **required for every generation**, not merely a gate to satisfy. For most roles the boundary rejects `ingest_generated_media` until the task is claimed — but a privileged role (supervisor / admin) **bypasses that check and is still required to claim**. A bind that happens to succeed without a claim silently leaves the task showing as untouched: that is a workflow defect, not a shortcut.
+Generating media is a step in a tracked production workflow, not a free action. Whatever you are about to bind — an asset image, a music cue, a shot's first/last frame or keyframe, a shot's video, a shot's dialogue or sound effect — that resource's task must be **assigned to you** and **In progress** first, and claiming it is what records that progress. This is **required for every generation**, not merely a gate to satisfy. For most roles the boundary rejects `ingest_generated_media` until the task is claimed — but a privileged role (supervisor / admin) **bypasses that check and is still required to claim**. A bind that happens to succeed without a claim silently leaves the task showing as untouched: that is a workflow defect, not a shortcut.
 
 Claim the task that matches what you are generating:
 
 | What you're generating | `resource_type` | `task_type` |
 |---|---|---|
 | asset image (cast / location / prop / style / ...) | `asset` | `assetImage` |
+| music cue | `asset` | `assetAudio` |
 | shot first frame, last frame, or keyframe | `shot` | `keyframe` |
 | shot video | `shot` | `video` |
-| shot dialogue (audio) | `shot` | `audio` |
+| shot dialogue or sound effect (audio) | `shot` | `audio` |
 
 For **each** resource you are about to generate for:
 
@@ -34,6 +35,8 @@ For **each** resource you are about to generate for:
 3. **Now generate and bind.**
 
 Do this as ONE `create_assignment` call per resource, not a separate assign-then-start pair: claiming and starting in a single atomic call is correct and avoids a read-after-write race. `workflow_status` is one of the contract's task statuses — `not_started`, `in_progress`, `in_review`, `rejected`, `approved`, `cancelled` — and you claim+start with `in_progress`; the later statuses (`in_review`, `approved`, `rejected`) are set by a human in content review, not by you. (`set_assignment_status` still exists for moving a task you have *already* claimed to a status you are permitted to set.) `production_read` is read-only and `create_assignment` is additive, so this preamble costs nothing and your client does not prompt for it. It keeps the resource's status accurate in the UI. Do it even if your role could bypass the gate: an unclaimed bind that happens to succeed is still wrong. When you generate across many resources — a whole scene's first frames, or every shot's video — claim+start each resource's task in the same loop as its bind, never a batch that skips straight to binding.
+
+That sentence governs the task's `workflow_status` — the approval ladder. Media-level `selection_status` (`approve_media`) is a separate, narrower ladder, and it carries one narrow agent-side carve-out: discarding (never selecting) a previously-selected media, and only when a human's conversation decision already made that call. See `genvid-roblox-character-generation` §0 for the exact call shape and its record-keeping requirement — it is not something to improvise per production.
 
 ---
 
@@ -135,21 +138,76 @@ Two axes, one concept: you **claim and bind** on the `audio` lane (`task_type="a
 
 ## Generating a shot's sound effects (SFX)
 
-SFX shares the shot's **`audio`** task lane with dialogue and music — claim it the same way:
+SFX shares the shot's **`audio`** task lane with dialogue — claim it the same way:
 
 1. **Claim + start the audio task.** `production_write(method="create_assignment", project_id=..., resource_type="shot", resource_id=<shot_id>, task_type="audio", workflow_status="in_progress")`.
 2. **Generate the sound effect with your own T2A model.**
 3. **Bind it.** `ingest_generated_media(project_id=..., link_type="shot_sfx", shot_id=..., render_type="T2A", model_provider=..., model_name=..., prompt=..., params=..., source_url=<provider result url>)`.
 
-## Generating a shot's music
+Two axes, one concept, same as dialogue: you **claim and bind** on the `audio` lane (`task_type="audio"`, `link_type="shot_sfx"`), and you **price** it on `production_read` as `generation_type="sfx"`. If the SFX derives from a source clip, pass it in `input_media_ids` — it is recorded as a `source_audio` derivation link; text-only T2A has no input to pass.
 
-Music also shares the shot's **`audio`** task lane — claim it the same way:
+### Music is no longer bound to a shot
 
-1. **Claim + start the audio task.** `production_write(method="create_assignment", project_id=..., resource_type="shot", resource_id=<shot_id>, task_type="audio", workflow_status="in_progress")`.
-2. **Generate the score with your own T2M model.**
-3. **Bind it.** `ingest_generated_media(project_id=..., link_type="shot_music", shot_id=..., render_type="T2M", model_provider=..., model_name=..., prompt=..., params=..., source_url=<provider result url>)`.
+`shot_music` no longer binds. Music is asset-anchored, not shot-anchored: OMC
+defines `NarrativeMusic featuresIn NarrativeScene` and has no shot-level music
+relationship, so a music cue now binds to a **music asset** the same way a
+character image binds to a cast-member asset — not to a shot's `audio` task
+lane. This is not because the feature went unused; it is because the anchor was
+wrong: a cue runs across shots, and a shot-scoped slot could not express that.
+SFX stays shot-anchored and keeps working exactly as above; the two are not
+symmetric on purpose.
 
-Two axes, one concept, same as dialogue: you **claim and bind** on the `audio` lane (`task_type="audio"`, `link_type="shot_sfx"` or `link_type="shot_music"`), and you **price** it on `production_read` as `generation_type="sfx"` or `generation_type="music"`. If the SFX/music derives from a source clip, pass it in `input_media_ids` — it is recorded as a `source_audio` derivation link; text-only T2A/T2M has no input to pass.
+---
+
+## Generating a music cue
+
+Music has its own asset and its own **`assetAudio`** task lane — not a shot's
+`audio` lane:
+
+1. **Create the music asset.** `assets_write(method="create", project_id=..., name=<cue name>, asset_type="music", description=<optional>)`.
+2. **Claim + start the assetAudio task.** `production_write(method="create_assignment", project_id=..., resource_type="asset", resource_id=<asset_id>, task_type="assetAudio", workflow_status="in_progress")` — `resource_type="asset"`, and the task lane is `assetAudio`, not the `audio` lane shots use.
+3. **Generate the cue with your own T2M model.**
+4. **Bind it.** `ingest_generated_media(project_id=..., link_type="music_audio", asset_id=..., render_type="T2M", model_provider=..., model_name=..., prompt=..., params=..., source_url=<provider result url>)` — `asset_id`, not `shot_id`.
+
+Two axes, one concept, as with dialogue and SFX: you **claim and bind** on the
+asset's `assetAudio` lane (`task_type="assetAudio"`, `link_type="music_audio"`),
+and you **price** it on `production_read` as `generation_type="music"`. The
+pricing axis is unchanged by the move off the shot — only the anchor moved.
+
+`music_audio` is the music asset's **only** slot. A music asset has no image
+slot, which has a consequence worth knowing before you reach for
+`assets_write(method="update", asset_type="music")` to reclassify something that
+already exists: the retype cascades every linked media to the matching slot on
+the new type, and an image has no slot on `music`, so the whole retype is
+refused with `CONFLICT_LINK_TYPE_UNSUPPORTED` and tells you to detach that media
+first. Reclassifying a prop that carries PNGs into a music cue will not quietly
+carry the images across — it fails loudly, which is the intended behaviour.
+Retyping away from `location` is refused outright for an unrelated reason
+(`CONFLICT_LOCATION_IMMUTABLE`).
+
+### The waveform thumbnail (music only, for now)
+
+Genvid has no audio thumbnailer, so a music cue shows no visual
+representation unless you supply one. `ingest_generated_media` takes an
+optional `thumbnail_base64` param — a waveform PNG, base64-encoded — accepted
+**only** on a `music_audio` bind; passed on any other lane, the bind is
+rejected outright. Image and video already derive their own thumbnail and
+must not gain a second, caller-controlled source; the shot-scoped audio lanes
+(`shot_dialog` / `shot_sfx`) are a different case — nothing renders
+`media.thumbnail` for a shot's audio today (the shot surfaces show
+`thumbnail_url`, a signed URL of the file itself, which deliberately skips
+audio), so accepting a waveform there would take bytes no surface displays.
+That is a gap to close alongside a renderer, not today's contract. Genvid
+writes the accepted waveform to `<stored filename>-thumbnail.png` alongside
+the audio file and stamps it as the media's thumbnail; the response's
+`thumbnail` field echoes back the path actually written (or `null`).
+
+Omitting it is the **normal** case, not an error: a UI upload and a
+registered cue (whose bytes Genvid never sees) never get a waveform either,
+and the asset grid shows a visible placeholder instead — never fails the
+bind. A malformed image is treated the same way: dropped, logged, still
+binds. Generate the waveform yourself if you want one shown; there is no
+other path to it.
 
 Pricing caveat (all lanes): `get_cost_estimate` prices against **Genvid's model catalog** (the response says so in `cost_basis`); since you generate with your own model and key, your actual cost is whatever your provider charges, not that catalog figure — treat it as a rough planning proxy only. For a real pre-spend check, use `check_generation_budget` (Step 0b) with YOUR OWN provider's price; for the record of what you actually spent, attest it on the bind (`attested_cost_amount`/`attested_cost_currency`, required — see the param table in Step 2) and read `budget_status` back from the response.
 
