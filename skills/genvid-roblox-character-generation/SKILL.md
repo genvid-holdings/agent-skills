@@ -731,13 +731,42 @@ a read-only Studio step that reads the synced sequence and the template back;
 that is missing or differs, naming the `clips build` + Rojo sync to re-run.
 `clips publish-clip` publishes the title `clips build` recorded, and only after
 that ingest has verified the same title. `studio emit publish_clip` is gated
-the same way, and refuses a CLIP that is not on `stages.clips.items` at all
-unless `--param UNVERIFIED_OK=<reason>` is passed (the reason goes into the
-manifest's notes). A title that builds one clip per attack archetype should
-put each archetype on the manifest as a clip item, so it is transferred,
-built, verified and published like any other clip; a re-run of `clips build` drops the
+the same way, and refuses a CLIP that is not on `stages.clips.items` at all,
+with no bypass. A title's own clips are declared keys (below), so each one is
+a manifest item that is transferred, built, verified and published like any
+other clip; a re-run of `clips build` drops the
 earlier verification, so a rewritten file is verified again before it is
 published.
+
+**A title's own clip keys (`clips declare`).** The catalog's clips (Walk,
+Idle, Stun, Attack, Death, Slam) are the pack's. A title whose characters play
+clips of their own — one per attack kind, say — declares each key on the
+manifest before the first step that creates it:
+
+    runner clips declare --manifest ... --clip wave --loop false --priority Action \
+        --description "both arms rise overhead and wave slowly"
+
+`--loop` and `--priority` (Idle, Movement or Action) are what the clip's
+KeyframeSequence is built with; `--description` is the motion `clips emit
+motion` asks a text-to-motion model for, and that step refuses a key declared
+without one. The key is letters and digits starting with a letter; a catalog
+clip's name, or a key that differs from another declared key or a clip
+item's key only in case, is refused.
+The declaration lands at `stages.clips.declared.<key>`; re-declaring a key
+replaces it.
+
+The steps that CREATE a clip (`clips transfer`, `clips emit motion`, `clips
+ingest motion`) take a catalog clip or a declared key. A declared key has no
+catalog candidates: its motion comes through `clips ingest motion`, then
+`clips transfer --source generated`, and `--source catalog` on it is refused.
+Every step after that (`build`, `build-kfs`, `publish-clip`, `bench`,
+`impact`, `bind`, `registered`, and `studio ingest ... --clip`) takes any key
+on `stages.clips.items`, since the item carries its own loop and priority; an
+item a title's own transfer wrote is accepted there without a declaration.
+Any other key is refused by name, listing the keys that are valid. The
+published title is `<Name><Key>_v<N>` with the key's first letter upper-cased
+(`wave` publishes as `<Name>Wave_v1`); a catalog clip's title is unchanged. `clips impact`
+records one impact clip (`attackImpactClip`) whichever key it measures.
 `build_kfs` no longer builds anything in Studio and uses no Network:
 `execute_luau` runs sandboxed without the Network capability since Studio 0.739,
 so the old route (poses fetched over `HttpService` from a server the runner
@@ -765,8 +794,20 @@ the published clip plays, and each cost a publish-and-bind round:
 
 1. *Root motion is emitted.* `poses.py` writes the root bone's translation per
    frame under `frames[i].r` (the hips' world delta, mapped by the same `g` as
-   the rotations, scaled by rig/clip height, expressed in the root bone's
-   rest frame); `kfs.write` puts it in the LowerTorso pose position. A rotation-only transfer plays every crouch as legs folding under
+   the rotations, scaled by `k`, expressed in the root bone's rest frame);
+   `kfs.write` puts it in the LowerTorso pose position. `k` (recorded in the
+   poses doc) is the LEG-CHAIN ratio, hip joint to knee to ankle on both
+   sides, between rest.json and the clip's bind: an overall-height ratio read
+   off a library skeleton after the rename/merge spans about hips-to-skull,
+   not feet-to-crown, and made root motion 1.37x too large (witnessed
+   2026-09-23: a 70-stud rig's death dropped its hips 47 studs where 34.5 was
+   the clip's drop at the rig's scale). A bone scale the clip keys is stripped
+   before the transfer (one library idle keys 1.176 on Hips on every frame),
+   so every emitted quaternion is unit length. `k` also scales the truth
+   ranges the empirical axis-map pick scores against (law 2), so a clip
+   re-transferred after the leg-chain change can pick a different map than
+   before: compare the `g` the transfer records, and pin it with `--g` or
+   `--g-from`. A rotation-only transfer plays every crouch as legs folding under
    a pelvis pinned at standing height and a fall as a torso rotating around
    hips that stay in the air (`--no-root` keeps that output; the accepted walk
    and idle were built on it and are not rebuilt).
@@ -825,7 +866,28 @@ hips at giant-character scale, which bind-relative motion turned into a mesh sit
 off its collider for the whole clip and snapping back at the end);
 `--root-ref=bind` is for a clip that starts mid-air or crouched and should
 read that way (`clips transfer --root-ref first|bind`; `--no-root` emits the
-rotation-only doc; the item records `root_ref` and `root_motion`). Check
+rotation-only doc; the item records `root_ref` and `root_motion`).
+
+The hips delta alone does not keep the feet on the ground, whatever `k` or
+reference: library clips are not grounded against their own bind (measured
+on one rig's clips, 2026-09-23: a walk's lowest foot swings 8 studs under
+and 4 over the bind sole, a death sinks 14, an idle with a keyed hips scale
+hovers 3 to 4), and the rig loses the clip's toe joints. `clips transfer
+--root-y ground` locks the VERTICAL root motion instead: every frame, the
+offset that puts the rig's lowest skinned vertex back on its rest level (the
+ground the rig was fitted to), so a crouch, a kneel or a lie-down rests on
+the ground and nothing sinks or hovers; the horizontal still follows
+`--root-ref`. It skins the rig's own mesh, `stages.rig.artifact_glb` by
+default (`--rig-mesh <glb>` for an adopted rig), fitted to rest.json by a
+similarity and refused when a bone origin misses by more than 1% of the mesh
+height (the mesh is then not the rig rest.json came from). The item records
+`root_y` (`hips`, the default, or `ground`), `k` and the fit (`ground`). The
+lock keeps the lowest point down on every frame, so a clip whose feet dig
+into the ground at toe-off bobs its hips by the dig instead (a walk measured
+above: root height swinging -5 to +6 studs); it is opt-in, and it is wrong for
+a clip meant to leave the ground. Offline, on one 70-stud rig: `hips` left
+the soles from -17 to +10 studs off the ground across six clips (a death ended
+14 under), `ground` holds 0.0 on all six. Check
 `frames[0].r` and `frames[-1].r` before publishing: an
 Action clip the game holds (a stun, a death) keeps its last-frame offset for
 as long as it is held, and a clip that blends back to idle snaps from it. A
@@ -860,9 +922,16 @@ rejected; no proxy), then `finalize_media_registration` with
 `roblox.com` `asset_id:` identifier, `size_bytes` measured from the poses
 file (stated in `generation.params`), `duration_seconds` = the scaled
 length, and NO `target`/`stage` (the keyframesequence stage is refused).
-`clips bind` writes exactly this, and cites the clip's source row in
+`clips bind` writes exactly this, registering each clip under the title
+`clips build` recorded for it (so clips at different versions bind in one
+call; a `--version`/`--name` that gives another title is refused, and a
+clip with no build record needs an explicit `--version`), and cites the clip's source row in
 `input_media_ids`: a generated clip's motion row, a rig-bundled clip's own row,
-nothing for an archive clip. Cost lives on the generation rows, never on the
+nothing for an archive clip. An item from any other source (a title's own
+transfer, which writes the item itself) must carry `source_media_id`, the
+Genvid row of the file it was transferred from, which bind cites in
+`input_media_ids` and `generation.params.source_record`; without it the bind
+is refused before any payload is written. Cost lives on the generation rows, never on the
 clip item: an item carries only `cost_source` (`rig`, `none`, or
 `clips.generated.<clip>`), and no clip row attests "0". A bundled clip's row
 omits the cost fields, since the rig's row holds the spend.

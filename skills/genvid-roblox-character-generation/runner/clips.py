@@ -33,6 +33,7 @@ finalized Genvid media id back.
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -109,6 +110,8 @@ MOTION_CHECKED_AT_INGEST = [
 # and the motion's own record for a generated one.
 COST_SOURCE_RIG = "rig"
 COST_SOURCE_NONE = "none"
+# The sources `clipsources.locate()` resolves: free library files, cited by nothing.
+ARCHIVE_SOURCES = ("mixamo-archive", "quaternius")
 NO_CLIP_FILES = ("stages.rig has no clip_files: this rig's bundled clips came from the old generator, which "
                  "named them by vendor id. Record each one with `rig ingest model --unrequested \"<reason>\" "
                  "--rig <the raw rig> --clip <Clip>=<file> ...` (adding --supersede when the rig is bound), or "
@@ -128,20 +131,127 @@ def _rig_clip_path(m, label):
     return Path(files[label])
 
 
+# A title's own clip keys (`clips declare`), beside the catalog's. The grammar is
+# the one a published title can carry (kfs.clip_name).
+CLIP_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
+
+
+def declared(m):
+    """`{key: {loop, priority, description}}` this manifest's title declared."""
+    return dict((m["stages"].get("clips") or {}).get("declared") or {})
+
+
+def declare(m, clip, *, loop, priority, description=None):
+    """Declare `clip` as one of this title's own clip keys, with the loop and
+    priority its KeyframeSequence is built with and, optionally, the motion a
+    text-to-motion model is asked for (`clips emit motion` refuses a key
+    without one).
+
+    Refuses a key outside the published-title grammar, a catalog clip, and a
+    key that differs from a catalog key, a declared key or a key already on
+    stages.clips.items only in case: the
+    published title upper-cases the key's first letter (`clip_title`), so two
+    such keys would publish under one title. Re-declaring the same key
+    replaces its declaration."""
+    if not CLIP_KEY_RE.match(str(clip)):
+        raise ValueError("clips declare %r: a clip key is letters and digits, starting with a letter (it becomes "
+                         "part of the published title)" % (clip,))
+    if priority not in kfs.PRIORITY:
+        raise ValueError("clips declare %s: --priority must be one of %s" % (clip, ", ".join(kfs.PRIORITY)))
+    items = (m["stages"].get("clips") or {}).get("items") or {}
+    for other, kind in ([(k, "catalog clip") for k in clipsources.CATALOG] + [(k, "declared key") for k in declared(m)]
+                        + [(k, "clip item") for k in items]):
+        if other.lower() == clip.lower() and (other != clip or kind == "catalog clip"):
+            raise ValueError("clips declare %s: collides with %s %s; a declared key is none of the catalog's (%s) "
+                             "and differs from every other key and clip item by more than case"
+                             % (clip, kind, other, ", ".join(sorted(clipsources.CATALOG))))
+    keys = declared(m)
+    keys[clip] = {"loop": bool(loop), "priority": priority, "description": description or None}
+    manifest.set_stage(m, "clips", declared=keys)
+    manifest.save(m)
+    return keys[clip]
+
+
+def known_key(m, clip):
+    """A key a clip may be CREATED under (transfer, emit/ingest motion): a
+    catalog clip or one `clips declare` recorded. Refuses any other by name."""
+    if clip in clipsources.CATALOG or clip in declared(m):
+        return clip
+    raise ValueError("unknown clip %r: one of the catalog's (%s) or a key this manifest declared (%s); "
+                     "declare a title's own clip with `clips declare --clip %s --loop ... --priority ...`"
+                     % (clip, ", ".join(sorted(clipsources.CATALOG)), ", ".join(sorted(declared(m))) or "none",
+                        clip))
+
+
+def item_key(m, clip, step):
+    """A key a clip step ACTS on: one already on stages.clips.items, whose
+    item carries its own loop and priority. Refuses any other by name."""
+    items = (m["stages"].get("clips") or {}).get("items") or {}
+    if clip in items:
+        return clip
+    raise ValueError("clips %s: %r is not on stages.clips.items (have %s) -- run clips transfer first"
+                     % (step, clip, ", ".join(sorted(items)) or "none"))
+
+
+def clip_props(m, clip):
+    """`(loop, priority)` for a clip key: the catalog's first candidate's, or
+    the declaration's."""
+    if clip in clipsources.CATALOG:
+        base = clipsources.CATALOG[clip][0]
+        return base["loop"], base["priority"]
+    known_key(m, clip)
+    d = declared(m)[clip]
+    return d["loop"], d["priority"]
+
+
+def description_of(m, clip):
+    """The motion `clip` asks a text-to-motion model for: the catalog's, or the
+    declaration's; refused when a declared key carries none."""
+    if clip in clipsources.DESCRIPTIONS:
+        return clipsources.DESCRIPTIONS[clip]
+    known_key(m, clip)
+    text = declared(m)[clip].get("description")
+    if not text:
+        raise request.IngestError("clip %s was declared without a description, so there is no motion to ask for: "
+                                  "re-run `clips declare --clip %s ... --description \"...\"`" % (clip, clip))
+    return text
+
+
+def _known_description(m, clip):
+    """`description_of` without its refusal: an ingest records the motion the
+    caller already has, so a key declared without a description ingests with
+    no prompt rather than being refused."""
+    return clipsources.DESCRIPTIONS.get(clip) or declared(m).get(clip, {}).get("description") or ""
+
+
 def generated_candidate(m, clip):
     """The transfer candidate for `clip`'s generated motion, from its ingest
-    record: the recorded file, its skeleton convention, and the catalog's loop
-    and priority for the clip."""
+    record: the recorded file, its skeleton convention, and the catalog's (or
+    the declaration's) loop and priority for the clip."""
     rec = ((m["stages"].get("clips") or {}).get("generated") or {}).get(clip)
     if not rec:
         raise ValueError("no generated motion recorded for %s: run `clips ingest motion --clip %s` first"
                          % (clip, clip))
-    base = clipsources.CATALOG[clip][0]
+    loop, priority = clip_props(m, clip)
     return {"source": "generated", "ref": rec["artifact"], "mode": MOTION_MODES[rec["mode"]],
-            "mode_name": rec["mode"], "loop": base["loop"], "priority": base["priority"]}
+            "mode_name": rec["mode"], "loop": loop, "priority": priority}
+
+
+def catalog_candidate(m, clip, index):
+    """The catalog's candidate `index` for `clip`. A declared key has no catalog
+    candidates: its motion comes from `clips ingest motion`."""
+    known_key(m, clip)
+    if clip not in clipsources.CATALOG:
+        raise ValueError("clip %s is a declared key with no catalog candidates: record its motion with `clips "
+                         "ingest motion --clip %s`, then `clips transfer --clip %s --source generated`"
+                         % (clip, clip, clip))
+    return clipsources.CATALOG[clip][index]
 
 
 ROOT_REFS = ("first", "bind")
+# Vertical root motion (poses.py --root-y): the proportional hips delta, or the
+# ground lock that keeps the rig's lowest skinned vertex on the ground.
+ROOT_YS = ("hips", "ground")
 # What `impact()` records on stages.clips, all of it for one clip (attackImpactClip).
 IMPACT_KEYS = ("attackImpactDelaySecs", "attackImpactRawSecs", "attackImpactClip")
 
@@ -161,9 +271,14 @@ def parse_trim(value):
 
 def recorded_g(m, clip):
     """The axis map `clip`'s transfer used, read from its poses doc: what
-    `--g-from <clip>` forces on another clip of the same skeleton."""
-    item = ((m["stages"].get("clips") or {}).get("items") or {}).get(clip)
-    path = Path(item["poses"]) if item and item.get("poses") else Path(m["out_dir"]) / "clips" / ("%s.poses.json" % clip)
+    `--g-from <clip>` forces on another clip of the same skeleton. `clip` must
+    be on stages.clips.items: the key is never turned into a path unchecked."""
+    items = (m["stages"].get("clips") or {}).get("items") or {}
+    item = items.get(clip)
+    if not item or not item.get("poses"):
+        raise ValueError("--g-from %s: %r has no transferred item on stages.clips.items (have %s); transfer %s first"
+                         % (clip, clip, ", ".join(sorted(items)) or "none", clip))
+    path = Path(item["poses"])
     if not path.is_file():
         raise ValueError("--g-from %s: no poses doc for %s at %s; transfer %s first" % (clip, clip, path, clip))
     g = json.loads(path.read_text()).get("g")
@@ -173,7 +288,7 @@ def recorded_g(m, clip):
 
 
 def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloads=None, blender=None,
-             g=None, g_from=None, no_root=False, root_ref=None, trim=None):
+             g=None, g_from=None, no_root=False, root_ref=None, trim=None, root_y=None, rig_mesh=None):
     """Run `blender/poses.py` on `candidate` for `clip`; record the result under
     `stages.clips.items[<clip>]` and return the poses JSON path. A generated
     motion's candidate comes from `generated_candidate()`.
@@ -185,13 +300,30 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
     `root_ref` measures root motion from the clip's `first` frame (poses.py's
     default) or the `bind` pose; `trim` ("START:END", seconds of the source
     clip) keeps that range only, re-based to start at 0, so `clip_seconds` and
-    `scaled_seconds` are the trimmed length."""
+    `scaled_seconds` are the trimmed length; `root_y="ground"` locks the
+    vertical root motion so the rig's lowest skinned vertex stays on the ground
+    every frame (the horizontal still follows `root_ref`), skinning `rig_mesh`
+    (default `stages.rig.artifact_glb`, the rig's glb twin) with the transfer."""
     manifest.require_stage(m, "clips")
+    known_key(m, clip)
     if g and g_from:
         raise ValueError("pass --g or --g-from, not both")
     if root_ref is not None and root_ref not in ROOT_REFS:
         raise ValueError("--root-ref must be one of %s" % ", ".join(ROOT_REFS))
     trim_range = parse_trim(trim) if trim is not None else None
+    if root_y is not None and root_y not in ROOT_YS:
+        raise ValueError("--root-y must be one of %s" % ", ".join(ROOT_YS))
+    if rig_mesh and root_y != "ground":
+        raise ValueError("--rig-mesh is read only by --root-y ground")
+    if root_y == "ground":
+        if no_root:
+            raise ValueError("--root-y ground locks root motion; --no-root emits none")
+        rig_mesh = rig_mesh or (m["stages"].get("rig") or {}).get("artifact_glb")
+        if not rig_mesh:
+            raise ValueError("--root-y ground skins the rig's mesh, and stages.rig records no artifact_glb: "
+                             "pass --rig-mesh <the skinned glb of the rig rest.json was dumped from>")
+        if not Path(rig_mesh).is_file():
+            raise FileNotFoundError("--root-y ground: rig mesh %s is not on disk" % rig_mesh)
     if g_from:
         g = recorded_g(m, g_from)
     source = candidate["source"]
@@ -216,7 +348,7 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
                              "--supersede` to bind it, or restore the bound file"
                              % (label, (rig_st.get("clip_media_ids") or {}).get(label)))
         cost_source = COST_SOURCE_RIG
-    elif source in ("mixamo-archive", "quaternius"):
+    elif source in ARCHIVE_SOURCES:
         root = Path(archive_root) if archive_root else clipsources.archive_root()
         dl = Path(downloads) if downloads else clipsources.DEFAULT_DOWNLOADS
         clip_path = clipsources.locate(candidate, root, dl)
@@ -248,6 +380,8 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
         argv.append("--root-ref=%s" % root_ref)
     if trim_range:
         argv.append("--trim=%s:%s" % trim_range)
+    if root_y == "ground":
+        argv += ["--root-y=ground", "--rig-mesh=%s" % rig_mesh]
     r = subprocess.run(argv, capture_output=True, text=True)
     # --python-exit-code 1 (as rig.r15() uses): without it Blender exits 0 on a
     # raised exception too, and a stale poses.json from an earlier run would
@@ -282,6 +416,8 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
             # what poses.py reports it did, beside what was asked of it
             "g": poses.get("g"), "g_forced": bool(poses.get("g_forced")), "g_from": g_from,
             "root_motion": poses.get("root_motion", not no_root), "root_ref": poses.get("root_ref", root_ref),
+            "root_y": poses.get("root_y", None if no_root else (root_y or "hips")), "k": poses.get("k"),
+            "ground": poses.get("ground"),
             "trim": list(trim_range) if trim_range else None}
     items[clip] = item
     manifest.set_stage(m, "clips", items=items)
@@ -298,8 +434,12 @@ def clip_title(m, clip, version=1, name=None):
     template names carrying vendor words, and `kfs.clip_name` refuses to build a
     published title from one, since a published asset title carries no source
     brand. Default is the manifest's own `name`, which is already the brand-free
-    one (`contract_name` is what the template answers to)."""
-    return kfs.clip_name(name or m["name"], clip, version)
+    one (`contract_name` is what the template answers to).
+
+    The clip's word in the title is its key with the first letter upper-cased:
+    a catalog key is already capitalized, and a title's declared key may be
+    lowercase (`clips declare`)."""
+    return kfs.clip_name(name or m["name"], clip[:1].upper() + clip[1:], version)
 
 
 # `clips build-kfs --port` served <out_dir> to a Studio step that fetched the
@@ -519,32 +659,34 @@ def _rig_inputs(m):
         [("rig-glb", str(rig_st["glb_media_id"]))] if rig_st.get("glb_media_id") else [])
 
 
-def _check_clip(clip):
-    if clip not in clipsources.CATALOG:
-        raise request.IngestError("unknown clip %r: one of %s" % (clip, ", ".join(sorted(clipsources.CATALOG))))
-    return clip
+def _check_clip(m, clip):
+    try:
+        return known_key(m, clip)
+    except ValueError as e:
+        raise request.IngestError(str(e))
 
 
 def emit_motion(m, clips, estimate, model=None, no_urls=False, run=subprocess.run):
     """Write one text-to-motion request per clip, behind one budget check for the
     whole set; returns the request paths."""
     manifest.require_stage(m, "clips")
-    clips = sorted(dict.fromkeys(_check_clip(c) for c in clips or ()))
+    clips = sorted(dict.fromkeys(_check_clip(m, c) for c in clips or ()))
     if not clips:
         raise request.IngestError("name at least one --clip")
+    prompts = {clip: description_of(m, clip) for clip in clips}
     roles = _rig_inputs(m)
     entry = budget.gate(m, "clips", estimate, model=model, items=clips)
     ins = request.inputs(m, roles, no_urls=no_urls, run=run)
     paths = []
     for clip in clips:
-        cand = clipsources.CATALOG[clip][0]
+        loop, priority = clip_props(m, clip)
         ingest = request.ingest_command(m, "clips", MOTION_STEP).replace(
             "--provider", "--clip %s --mode <%s> --provider" % (clip, "|".join(sorted(MOTION_MODES))))
         paths.append(request.write_request(
             m, "clips", MOTION_STEP, clip, model_type=MOTION_MODEL_TYPE, render_type=MOTION_RENDER_TYPE,
-            prompt=clipsources.DESCRIPTIONS[clip], inputs=ins, target=MOTION_TARGET,
+            prompt=prompts[clip], inputs=ins, target=MOTION_TARGET,
             must_satisfy=MOTION_MUST_SATISFY, checked_at_ingest=MOTION_CHECKED_AT_INGEST, budget_entry=entry,
-            ingest=ingest, extra={"clip": clip, "loop": cand["loop"], "priority": cand["priority"]}))
+            ingest=ingest, extra={"clip": clip, "loop": loop, "priority": priority}))
     return paths
 
 
@@ -571,7 +713,7 @@ def ingest_motion(m, clip, result, att, *, mode, prompt=None, render_type=None, 
     media id (None with `record_only`). `clips transfer --source generated`
     reads it back."""
     manifest.require_stage(m, "clips")
-    _check_clip(clip)
+    _check_clip(m, clip)
     if mode not in MOTION_MODES:
         raise request.IngestError("--mode must be one of %s: the skeleton convention the clip is authored on"
                                   % ", ".join(sorted(MOTION_MODES)))
@@ -584,7 +726,7 @@ def ingest_motion(m, clip, result, att, *, mode, prompt=None, render_type=None, 
     def make(path, url, kind):
         rec = request.make_record(
             artifact=path, source_url=url, attestation=att,
-            prompt=prompt if prompt is not None else (req.get("prompt") or clipsources.DESCRIPTIONS[clip]),
+            prompt=prompt if prompt is not None else (req.get("prompt") or _known_description(m, clip)),
             render_type=render_type or req.get("render_type") or MOTION_RENDER_TYPE,
             input_media_ids=ids, request_path=req_path, vendor_hint=m.get("vendor"))
         rec.update(kind=kind, mode=mode)
@@ -637,7 +779,12 @@ def _source_citation(m, clip, item):
     the Genvid row its motion came from. A generated clip cites its motion row
     and carries that row's attestation; a rig-bundled clip cites its bundled
     clip row (which cites the rig, whose row holds the spend); an archive clip
-    cites nothing, since nothing was generated."""
+    cites nothing, since nothing was generated.
+
+    An item from any other source (a title's own transfer, which writes the
+    item itself) cites `item["source_media_id"]`, the Genvid row of the file
+    it was transferred from, and is refused without one: a published clip
+    whose source never reached Genvid would register with no provenance."""
     if item["source"] == "generated":
         motion_id = _motion_ids(m).get(clip)
         if not motion_id:
@@ -655,16 +802,50 @@ def _source_citation(m, clip, item):
                              "re-run `rig bind` (or `rig ingest model`) to bind it first" % (clip, item["ref"]))
         return [str(clip_id)], {"cost_source": COST_SOURCE_RIG, "media_id": str(clip_id),
                                 "rig_media_id": str(rig_st.get("media_id"))}
-    return [], None
+    if item["source"] in ARCHIVE_SOURCES:
+        return [], None
+    source_id = item.get("source_media_id")
+    if not source_id:
+        raise ValueError("clips.bind(%s): source %r is none of generated, rig-bundled or %s, and the item carries no "
+                         "source_media_id: bind the file the clip was transferred from as Genvid media and record "
+                         "its id on stages.clips.items.%s.source_media_id first"
+                         % (clip, item["source"], " or ".join(ARCHIVE_SOURCES), clip))
+    return [str(source_id)], {"source": item["source"], "media_id": str(source_id)}
 
 
-def bind(m, ids, version=1, name=None):
+def _bind_title(m, clip, item, version, name):
+    """The published title `bind` registers `clip` under: the one `clips build`
+    recorded (`kfs_name`, which is what `publish_clip` published), per clip,
+    since the clips on one manifest can be at different versions. A
+    `--version`/`--name` that gives another title is refused, as `build_kfs`
+    and `publish_clip` refuse it. A clip with no build record (published by
+    hand) takes its title from an explicit `--version` (and `--name`, when
+    the title's prefix is not the manifest's name), and is refused without
+    one: a defaulted version names an asset nobody checked exists."""
+    built = item.get("kfs_name")
+    if not built:
+        if version is None:
+            raise ValueError("clips.bind(%s): no `clips build` record (kfs_name) says which title was published; "
+                             "run `clips build --clip %s` for it, or pass --version (and --name) naming the "
+                             "published title" % (clip, clip))
+        return clip_title(m, clip, version, name)
+    if version is not None or name is not None:
+        title = clip_title(m, clip, version or 1, name)
+        if title != built:
+            raise ValueError("clips.bind(%s): --version/--name give %s, but `clips build` recorded %s, the title "
+                             "publish_clip published; drop them, or pass the ones that give %s"
+                             % (clip, title, built, built))
+    return built
+
+
+def bind(m, ids, version=None, name=None):
     """ORCHESTRATOR STEP for its governed writes -- never called by this
     runner. `ids`: `{clip: roblox_asset_id}` for every clip a human has
     published (`publish_clip`'s `CreateAssetAsync`, or a manual Save to
-    Roblox). `version`/`name` match the published title `publish_clip`/
-    `build` used (see `clip_title`) -- see the module docstring for why the
-    Studio template name and the published title can differ.
+    Roblox). Each clip registers under the title `clips build` recorded for
+    it (`_bind_title`); `version`/`name`, when passed, must give that same
+    title -- see the module docstring for why the Studio template name and
+    the published title can differ.
 
     A published clip is PLATFORM-CUSTODIED media: the bytes live only as a
     Roblox asset id, which is exactly what `register_media`'s
@@ -721,14 +902,18 @@ def bind(m, ids, version=1, name=None):
     """
     # Media-bind-only site -- before the first register_media payload, not
     # per-clip (one claim covers every clip's payload pair in this call).
+    for clip in ids:
+        item_key(m, clip, "bind")
     items = dict(m["stages"]["clips"]["items"])
+    # Every title is resolved before any governed write, like the source rows.
+    titles = {clip: _bind_title(m, clip, items[clip], version, name) for clip in ids}
     # Every clip's source row is resolved before any governed write.
     sources = {clip: _source_citation(m, clip, items[clip]) for clip in ids}
     genvid_bind.ensure_claim(m, m["asset_id"], "clips")
     roblox_ids = dict(m["stages"].get("clips", {}).get("roblox_ids") or {})
     for clip, roblox_id in ids.items():
         item = items[clip]
-        title = clip_title(m, clip, version, name)
+        title = titles[clip]
         # A `.rbxmx` filename is rejected at register_media (422 "Cannot determine
         # media type from filename", 2026-09-04) and so was every bind from
         # 2026-09-04 to 09-09, which the orchestrator re-shaped by hand. The shape
@@ -819,41 +1004,57 @@ def registered(m, clip, media_id):
     return items[clip]
 
 
+def _on_item(x, step):
+    """The manifest, once `--clip` is checked against stages.clips.items:
+    argparse cannot, since the valid keys live on the manifest it has not
+    loaded yet."""
+    m = manifest.load(x.manifest)
+    item_key(m, x.clip, step)
+    return m
+
+
+def _declare_cli(x):
+    declare(manifest.load(x.manifest), x.clip, loop=x.loop == "true", priority=x.priority,
+            description=x.description)
+
+
 def _transfer_cli(x):
     m = manifest.load(x.manifest)
+    known_key(m, x.clip)
     if x.source == "generated":
         candidate = generated_candidate(m, x.clip)
     else:
-        candidate = clipsources.CATALOG[x.clip][x.candidate]
+        candidate = catalog_candidate(m, x.clip, x.candidate)
     transfer(m, x.clip, candidate, rest=x.rest,
              archive_root=x.archive_root, downloads=x.downloads, blender=x.blender,
-             g=x.g, g_from=x.g_from, no_root=x.no_root, root_ref=x.root_ref, trim=x.trim)
+             g=x.g, g_from=x.g_from, no_root=x.no_root, root_ref=x.root_ref, trim=x.trim,
+             root_y=x.root_y, rig_mesh=x.rig_mesh)
 
 
 def _build_cli(x):
-    build(manifest.load(x.manifest), x.clip, anims_dir=x.anims_dir, version=x.version, name=x.name,
+    build(_on_item(x, "build"), x.clip, anims_dir=x.anims_dir, version=x.version, name=x.name,
           time_scale=x.time_scale)
 
 
 def _build_kfs_cli(x):
     if x.port is not None:
         raise SystemExit(PORT_RETIRED)
-    build_kfs(manifest.load(x.manifest), x.clip, version=x.version, name=x.name)
+    build_kfs(_on_item(x, "build-kfs"), x.clip, version=x.version, name=x.name)
     return 0
 
 
 def _publish_clip_cli(x):
-    publish_clip(manifest.load(x.manifest), x.clip, version=x.version, name=x.name)
+    publish_clip(_on_item(x, "publish-clip"), x.clip, version=x.version, name=x.name)
     return 0
 
 
 def _bench_cli(x):
-    bench(manifest.load(x.manifest), x.clip, speed=x.speed, max_wait=x.max_wait)
+    bench(_on_item(x, "bench"), x.clip, speed=x.speed, max_wait=x.max_wait)
     return 0
 
 
 def _impact_cli(x):
-    impact(manifest.load(x.manifest), x.clip)
+    impact(_on_item(x, "impact"), x.clip)
 
 
 def _speed_scale_cli(x):
@@ -884,15 +1085,31 @@ def _bind_cli(x):
 
 
 def _registered_cli(x):
-    registered(manifest.load(x.manifest), x.clip, x.media_id)
+    registered(_on_item(x, "registered"), x.clip, x.media_id)
+
+
+# `--clip` is checked after the manifest loads: the catalog's clips or a key the
+# manifest declared where a step creates the clip, a key on stages.clips.items
+# where a step acts on one.
+CLIP_HELP = ("a catalog clip (%s) or a key `clips declare` recorded; a step after `clips transfer` takes a key "
+             "on stages.clips.items" % ", ".join(sorted(clipsources.CATALOG)))
 
 
 def register(sub):
     p = sub.add_parser("clips"); s = p.add_subparsers(dest="cmd", required=True)
 
+    dc = s.add_parser("declare", help="declare one of this title's own clip keys, beside the catalog's")
+    dc.add_argument("--manifest", required=True)
+    dc.add_argument("--clip", required=True, help="the key: letters and digits, starting with a letter")
+    dc.add_argument("--loop", required=True, choices=("true", "false"))
+    dc.add_argument("--priority", required=True, choices=sorted(kfs.PRIORITY, key=kfs.PRIORITY.get))
+    dc.add_argument("--description", default=None,
+                    help="the motion a text-to-motion model is asked for; `clips emit motion` requires it")
+    dc.set_defaults(func=_declare_cli)
+
     a = s.add_parser("transfer"); a.add_argument("--manifest", required=True)
-    a.add_argument("--clip", required=True, choices=sorted(clipsources.CATALOG))
-    a.add_argument("--candidate", type=int, default=0, help="index into clipsources.CATALOG[clip]")
+    a.add_argument("--clip", required=True, help=CLIP_HELP)
+    a.add_argument("--candidate", type=int, default=0, help="index into clipsources.CATALOG[clip] (a catalog clip only)")
     a.add_argument("--source", choices=("catalog", "generated"), default="catalog",
                    help="generated: transfer the motion `clips ingest motion` recorded for this clip")
     a.add_argument("--rest", default="rest.json")
@@ -903,17 +1120,22 @@ def register(sub):
     ga = a.add_mutually_exclusive_group()
     ga.add_argument("--g", default=None, help="force the axis map (one of poses.py's 24 candidates, e.g. the "
                     "`g` a walk transfer recorded)")
-    ga.add_argument("--g-from", default=None, choices=sorted(clipsources.CATALOG),
+    ga.add_argument("--g-from", default=None,
                     help="force the axis map another clip's transfer recorded (transfer the walk first)")
     a.add_argument("--no-root", action="store_true", help="rotation-only: emit no root motion")
     a.add_argument("--root-ref", choices=ROOT_REFS, default=None,
                    help="root motion from the clip's first frame (poses.py's default) or the bind pose")
+    a.add_argument("--root-y", choices=ROOT_YS, default=None,
+                   help="vertical root motion: the hips delta (default) or `ground`, which keeps the rig's lowest "
+                        "skinned vertex on the ground every frame")
+    a.add_argument("--rig-mesh", default=None,
+                   help="with --root-y ground: the rig's skinned glb (default stages.rig.artifact_glb)")
     a.add_argument("--trim", default=None, metavar="START:END",
                    help="keep only this range of the source clip (seconds, authored time), re-based to 0")
     a.set_defaults(func=_transfer_cli)
 
     b = s.add_parser("build"); b.add_argument("--manifest", required=True)
-    b.add_argument("--clip", required=True, choices=sorted(clipsources.CATALOG))
+    b.add_argument("--clip", required=True, help=CLIP_HELP)
     b.add_argument("--anims-dir", default=None,
                    help="where to write the KeyframeSequence .rbxmx; defaults to "
                         "$GAME_ANIMS_DIR, which is required when this is omitted")
@@ -929,7 +1151,7 @@ def register(sub):
     bk = s.add_parser("build-kfs", help="emit the Studio step that verifies the KeyframeSequence `clips build` "
                                         "wrote has synced into Studio")
     bk.add_argument("--manifest", required=True)
-    bk.add_argument("--clip", required=True, choices=sorted(clipsources.CATALOG))
+    bk.add_argument("--clip", required=True, help=CLIP_HELP)
     bk.add_argument("--version", type=int, default=None,
                     help="optional: must match the title `clips build` recorded")
     bk.add_argument("--name", default=None, help="optional: must match the title `clips build` recorded")
@@ -938,7 +1160,7 @@ def register(sub):
 
     pc = s.add_parser("publish-clip", help="emit the Studio step that publishes the built, verified KeyframeSequence")
     pc.add_argument("--manifest", required=True)
-    pc.add_argument("--clip", required=True, choices=sorted(clipsources.CATALOG))
+    pc.add_argument("--clip", required=True, help=CLIP_HELP)
     pc.add_argument("--version", type=int, default=None,
                     help="optional: must match the title `clips build` recorded")
     pc.add_argument("--name", default=None, help="optional: must match the title `clips build` recorded")
@@ -946,13 +1168,13 @@ def register(sub):
 
     bc = s.add_parser("bench", help="emit the Play bench step for a PUBLISHED clip (hip drop, slide, head over sole)")
     bc.add_argument("--manifest", required=True)
-    bc.add_argument("--clip", required=True, choices=sorted(clipsources.CATALOG))
+    bc.add_argument("--clip", required=True, help=CLIP_HELP)
     bc.add_argument("--speed", type=float, default=None, help="playback speed; default 1")
     bc.add_argument("--max-wait", type=int, default=25, help="seconds the bridge call may block")
     bc.set_defaults(func=_bench_cli)
 
     c = s.add_parser("impact"); c.add_argument("--manifest", required=True)
-    c.add_argument("--clip", required=True, choices=sorted(clipsources.CATALOG))
+    c.add_argument("--clip", required=True, help=CLIP_HELP)
     c.set_defaults(func=_impact_cli)
 
     d = s.add_parser("speed-scale"); d.add_argument("--manifest", required=True)
@@ -962,14 +1184,14 @@ def register(sub):
     ems = em.add_subparsers(dest="step", required=True)
     emm = ems.add_parser("motion", help="one request per clip, behind one budget check")
     request.add_emit_args(emm, item_help="not used: name clips with --clip")
-    emm.add_argument("--clip", action="append", required=True, choices=sorted(clipsources.CATALOG),
-                     help="a clip to request (repeatable)")
+    emm.add_argument("--clip", action="append", required=True,
+                     help="a clip to request (repeatable): " + CLIP_HELP)
     emm.set_defaults(func=_emit_motion)
     ig = s.add_parser("ingest", help="record the caller's motion, then bind it")
     igs = ig.add_subparsers(dest="step", required=True)
     igm = igs.add_parser("motion", help="one clip's motion file, a local file or a URL")
     request.add_ingest_args(igm, item_help="not used: name the clip with --clip")
-    igm.add_argument("--clip", required=True, choices=sorted(clipsources.CATALOG))
+    igm.add_argument("--clip", required=True, help=CLIP_HELP)
     igm.add_argument("--mode", required=True, choices=sorted(MOTION_MODES),
                      help="the skeleton convention the clip is authored on: rename (the rig's own bone names), "
                           "mixamo, ual (Rigify DEF- names) or r15 (already R15-named)")
@@ -977,12 +1199,14 @@ def register(sub):
 
     f = s.add_parser("bind"); f.add_argument("--manifest", required=True)
     f.add_argument("--ids", required=True, nargs="+", help="Clip=RobloxAssetId pairs, space-separated")
-    f.add_argument("--version", type=int, default=1)
+    f.add_argument("--version", type=int, default=None,
+                   help="optional: must give the title `clips build` recorded; required for a clip with no "
+                        "build record")
     f.add_argument("--name", default=None, help="see `clips build --name`")
     f.set_defaults(func=_bind_cli)
 
     g = s.add_parser("registered", help="record the finalized Genvid media id for a clip bind() wrote payloads for")
     g.add_argument("--manifest", required=True)
-    g.add_argument("--clip", required=True, choices=sorted(clipsources.CATALOG))
+    g.add_argument("--clip", required=True, help=CLIP_HELP)
     g.add_argument("--media-id", required=True, help="the Genvid media id finalize_media_registration returned")
     g.set_defaults(func=_registered_cli)

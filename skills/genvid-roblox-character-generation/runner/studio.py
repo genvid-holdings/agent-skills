@@ -250,28 +250,26 @@ def set_park_folder(m, folder):
     return m
 
 
-def require_verified(m, clip, clip_name, unverified_ok=None):
+UNVERIFIED_OK_RETIRED = ("publish_clip no longer takes UNVERIFIED_OK: every clip is published only once `studio "
+                         "ingest build_kfs` has verified it. A title's own clip key is declared (`clips declare`), "
+                         "transferred and built as a manifest item like any other clip")
+
+
+def require_verified(m, clip, clip_name):
     """Refuse to emit `publish_clip` until `studio ingest build_kfs` has
     verified the title being published. Checked in emit() so every route is
     gated: `clips publish-clip`, `studio emit publish_clip --param CLIP=...
     --param CLIP_NAME=...`, and a caller's own studio.emit.
 
     A CLIP that is not on stages.clips.items has no build record to verify, so
-    it is refused too, unless the caller passes `UNVERIFIED_OK=<reason>`; the
-    reason is written to the manifest's notes. Clips a title builds per attack
-    archetype belong on the manifest as items, which is what makes them
-    verifiable."""
+    it is refused, with no bypass: a title's own clips (`clips declare`) are
+    manifest items, which is what makes them verifiable."""
     item = (((m.get("stages") or {}).get("clips") or {}).get("items") or {}).get(clip)
     if item is None:
-        if not unverified_ok:
-            raise ValueError(
-                "publish_clip %s: CLIP %r is not on stages.clips.items, so no `clips build` record exists to verify "
-                "it against. Transfer and build it as a manifest item (`clips transfer`/`clips build`, then "
-                "build-kfs + ingest + `clips publish-clip`), or pass --param UNVERIFIED_OK=<reason> to publish it "
-                "unverified; the reason is recorded" % (clip_name, clip))
-        manifest.note(m, "publish_clip %s (CLIP %s) emitted UNVERIFIED: %s" % (clip_name, clip, unverified_ok))
-        manifest.save(m)
-        return
+        raise ValueError(
+            "publish_clip %s: CLIP %r is not on stages.clips.items, so no `clips build` record exists to verify "
+            "it against. Transfer and build it as a manifest item (`clips declare` for a title's own key, "
+            "`clips transfer`/`clips build`, then build-kfs + ingest + `clips publish-clip`)" % (clip_name, clip))
     built = item.get("kfs_name")
     verified = (item.get("kfs_verified") or {}).get("name")
     if not built:
@@ -289,7 +287,9 @@ def require_verified(m, clip, clip_name, unverified_ok=None):
 
 def emit(m, step, **params):
     if step == "publish_clip":
-        require_verified(m, params.get("CLIP"), str(params.get("CLIP_NAME")), params.pop("UNVERIFIED_OK", None))
+        if "UNVERIFIED_OK" in params:
+            raise ValueError(UNVERIFIED_OK_RETIRED)
+        require_verified(m, params.get("CLIP"), str(params.get("CLIP_NAME")))
     template = manifest.template_name(m)
     # Manifest first, registered/pack default second: `studio.park_folder` is the
     # per-character override, so it has to beat a default register_steps merged in.

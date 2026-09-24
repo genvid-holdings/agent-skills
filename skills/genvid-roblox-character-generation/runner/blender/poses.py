@@ -5,7 +5,15 @@ into Roblox Bone.Transform pose data for the KeyframeSequence writer.
 Run headless:
   blender --background --python poses.py -- <clip.fbx|glb> <rest.json> <out.json> \\
       [--rename|--donor|--mixamo|--ual] [--action=NAME] [--rig-height=<studs>] \\
-      [--g=<candidate>] [--no-root] [--root-ref=first|bind] [--trim=START:END]
+      [--g=<candidate>] [--no-root] [--root-ref=first|bind] [--trim=START:END] \\
+      [--root-y=hips|ground --rig-mesh=<rig.glb>]
+
+`--root-y=ground` locks the vertical root motion to the ground: every frame's
+vertical offset puts the rig's lowest skinned vertex (the mesh in `--rig-mesh`,
+the skinned glb of the rig `rest.json` was dumped from, fitted to it and
+refused above a 1%-of-height fit error) back on its rest level. The horizontal
+root motion still follows `--root-ref`. The default, `hips`, carries the clip's
+hips height change scaled by the leg-chain ratio `k`.
 
 `--trim=START:END` keeps only the source clip's frames between START and END
 seconds (authored time, from the clip's first frame) and re-bases them so the
@@ -50,11 +58,10 @@ module (single source shared with the rig conversion); `--rename` normalizes
 vendor bone spellings before the rename/merge, as rig_r15.py does; the `.luau`
 writer is dropped (kfs.py builds the KeyframeSequence from the JSON); the JSON
 carries the world-space `traj` block that impact.py and metrics.py score, plus
-`clip_seconds` and `source`; and the rig height that normalizes the g-scoring
-ratio is the `--rig-height` argument (clips.py passes the manifest's
-`height_studs`) rather than a hard-coded 28.0 — rests are dumped at final scale
-now, so the ratio must use the real height. The 28.0 default is a fallback for
-the fixture test only.
+`clip_seconds` and `source`; and the clip-to-rig scale `k` (root motion and
+the g-scoring ratio) is the leg-chain ratio between the rig's rest and the
+clip's bind, recorded as `k` in the doc. `--rig-height` is still accepted
+(clips.py passes the manifest's `height_studs`) and only reported.
 """
 import bpy
 import json
@@ -102,11 +109,26 @@ def quat(M):
     return x, y, z, w
 
 
+def rotation_part(M):
+    """The nearest pure rotation to a 3x3 (polar decomposition by SVD). A pose
+    matrix carries any scale the clip keys on a bone; left in, the transferred
+    matrices stop being rotations and the emitted quaternions stop being unit
+    length (witnessed 2026-09-23: a library idle keys a uniform 1.176 scale on
+    Hips on every frame, and every bone's quaternion came out at norm
+    1.06-1.15)."""
+    u, _s, vt = np.linalg.svd(M)
+    R = u @ vt
+    if np.linalg.det(R) < 0:
+        u[:, -1] = -u[:, -1]
+        R = u @ vt
+    return R
+
+
 # The trajectory bones impact.py and metrics.py score: the two feet (stomp,
 # foot lift) and the two hands (a giant's slam lands with the hands).
 TRAJ_BONES = ("LeftFoot", "RightFoot", "LeftHand", "RightHand")
 
-RIG_HEIGHT_DEFAULT = 28.0  # studs, feet-to-crown; ratio-only use. clips.py passes the real one.
+RIG_HEIGHT_DEFAULT = 28.0  # studs, feet-to-crown; reported only (k is the leg-chain ratio)
 
 
 def rx(deg):
@@ -117,6 +139,89 @@ def rx(deg):
 def ry(deg):
     a = math.radians(deg)
     return np.array([[math.cos(a), 0, math.sin(a)], [0, 1, 0], [-math.sin(a), 0, math.cos(a)]])
+
+
+# The ground lock's rig-mesh fit refuses when a rest bone origin lands farther
+# than this fraction of the mesh height from where the mesh's own armature puts
+# it: the mesh is then not the rig rest.json was dumped from.
+GROUND_FIT_TOL = 0.01
+
+
+def ground_lows(rig_mesh, clip_arm, rb, order, Rw, Pw, poses):
+    """Lowest skinned vertex height (rig frame, studs) per frame, for the ground
+    lock. `poses` is [(W, WPr)] per frame: each bone's rig-frame world rotation
+    and origin with no root motion. The rig glb is imported beside the clip,
+    its armature's R15 bone heads are fitted to rest.json's rest origins by a
+    similarity (scale, rotation, offset), and the mesh is skinned per frame
+    with its own weights: v' = sum_b w_b (W_b Rw_b^T (v - P0_b) + P_b)."""
+    before = set(bpy.data.objects)
+    bpy.ops.import_scene.gltf(filepath=rig_mesh)
+    new = [o for o in bpy.data.objects if o not in before]
+    rig = next((o for o in new if o.type == "ARMATURE"), None)
+    mesh = next((o for o in new if o.type == "MESH" and o.parent is rig and o.vertex_groups), None)
+    if rig is None or mesh is None:
+        raise ValueError(f"--rig-mesh={rig_mesh}: no armature with a skinned mesh in it")
+    missing = [n for n in order if n not in rig.data.bones]
+    if missing:
+        raise ValueError(f"--rig-mesh={rig_mesh}: armature lacks bones {missing}")
+    rig.data.pose_position = "REST"
+    bpy.context.view_layer.update()
+    ev = mesh.evaluated_get(bpy.context.evaluated_depsgraph_get())
+    me = ev.to_mesh()
+    co = np.empty(len(me.vertices) * 3)
+    me.vertices.foreach_get("co", co)
+    mw = np.array(ev.matrix_world)
+    ev.to_mesh_clear()
+    V = co.reshape(-1, 3) @ mw[:3, :3].T + mw[:3, 3]
+    # rest origins in the rig frame, and the same bones' heads in Blender world
+    P0 = {}
+    for n in order:
+        pr = rb[n]["parent"]
+        P0[n] = P0.get(pr, np.zeros(3)) + Rw.get(pr, np.eye(3)) @ Pw[n]
+    src = np.array([P0[n] for n in order])
+    dst = np.array([list(rig.matrix_world @ rig.data.bones[n].head_local) for n in order])
+    ms, md = src.mean(0), dst.mean(0)
+    X, Y = src - ms, dst - md
+    U, S, Vt = np.linalg.svd(Y.T @ X)
+    D = np.eye(3)
+    D[2, 2] = np.sign(np.linalg.det(U @ Vt))
+    R = U @ D @ Vt
+    s = float((S * np.diag(D)).sum() / (X ** 2).sum())
+    off = md - s * R @ ms
+    Vr = ((V - off) @ R) / s                     # mesh in the rig frame, studs
+    # the largest distance between a rest bone origin and where the mesh's
+    # armature puts it, in studs
+    fit_err = float(np.linalg.norm((s * (R @ src.T)).T + off - dst, axis=1).max() / s) if s > 0 else math.inf
+    height = float(np.ptp(Vr[:, 1]))
+    tol = GROUND_FIT_TOL * height
+    print(f"ground lock: rig mesh {os.path.basename(rig_mesh)} fitted at {1 / s:0.3f} studs per unit, "
+          f"max bone-origin error {fit_err:0.4f} studs (tolerance {tol:0.3f}), mesh height {height:0.2f} studs")
+    if not fit_err <= tol:
+        raise ValueError(f"--rig-mesh={rig_mesh} does not fit rest.json: a bone origin is {fit_err:0.3f} studs off "
+                         f"(tolerance {tol:0.3f}); pass the skinned glb of the rig rest.json was dumped from")
+    Wt = np.zeros((len(Vr), len(order)))
+    gi = {g.index: g.name for g in mesh.vertex_groups}
+    col = {n: i for i, n in enumerate(order)}
+    for v in mesh.data.vertices:
+        for ge in v.groups:
+            c = col.get(gi[ge.group])
+            if c is not None:
+                Wt[v.index, c] += ge.weight
+    keep = Wt.sum(1) > 0
+    Vr, Wt = Vr[keep], Wt[keep] / Wt[keep].sum(1, keepdims=True)
+    rest_low = float(Vr[:, 1].min())
+    lows = []
+    for W, WPr in poses:
+        y = np.zeros(len(Vr))
+        for n, c in col.items():
+            w = Wt[:, c]
+            if w.any():
+                y += w * (((Vr - P0[n]) @ (W[n] @ Rw[n].T).T)[:, 1] + WPr[n][1])
+        lows.append(float(y.min()))
+    info = {"rig_mesh": os.path.basename(rig_mesh), "fit_err_studs": round(fit_err, 5),
+            "tolerance_studs": round(tol, 5), "studs_per_unit": round(1 / s, 5),
+            "vertices": int(len(Vr)), "rest_low": round(rest_low, 5)}
+    return lows, info
 
 
 def main():
@@ -154,6 +259,19 @@ def main():
     # (a clip that starts mid-air or crouched and should read that way).
     root_ref = next((a.split("=", 1)[1] for a in argv if a.startswith("--root-ref=")), "first")
     assert root_ref in ("first", "bind"), "--root-ref must be first or bind"
+    # Vertical root motion: "hips" (default) is the proportional hips delta
+    # from the root reference, like the horizontal; "ground" locks the rig's
+    # lowest skinned vertex to the ground on every frame instead, which needs
+    # the rig's own skinned mesh (`--rig-mesh=<rig glb>`, the file rest.json
+    # was dumped from). The horizontal follows --root-ref either way.
+    root_y = next((a.split("=", 1)[1] for a in argv if a.startswith("--root-y=")), "hips")
+    assert root_y in ("hips", "ground"), "--root-y must be hips or ground"
+    rig_mesh = next((a.split("=", 1)[1] for a in argv if a.startswith("--rig-mesh=")), None)
+    if root_y == "ground":
+        if not emit_root:
+            raise ValueError("--root-y=ground with --no-root: a rotation-only doc has no root motion to lock")
+        if not rig_mesh:
+            raise ValueError("--root-y=ground needs --rig-mesh=<the rig's skinned glb>")
     trim = next((a.split("=", 1)[1] for a in argv if a.startswith("--trim=")), None)
     if trim is not None:
         t_start, t_end = (float(v) for v in trim.split(":"))
@@ -246,6 +364,11 @@ def main():
     # a rotation and quaternions collapse (live find: constant w=0.5 quats)
     _u, _s, _vt = np.linalg.svd(np.array(mat9(arm.matrix_world))[:3, :3])
     AW = _u @ _vt
+    # a bone's rest matrix is built from head, tail and roll, so it is a pure
+    # rotation whatever scale the armature carried (witnessed 2026-09-23: after
+    # applying a (2, 0.5, -1.5) object scale, and on vendor glb and fbx rigs,
+    # every singular value is 1 within 1e-6); only the POSE matrices need
+    # rotation_part
     Bw = {n: AW @ np.array(mat9(arm.data.bones[src[n]].matrix_local))[:3, :3] for n in names}
     act = arm.animation_data.action
     f0, f1 = act.frame_range
@@ -271,7 +394,7 @@ def main():
         A = {}
         for n in names:
             pm = arm.pose.bones[src[n]].matrix
-            A[n] = AW @ np.array(mat9(pm))[:3, :3]
+            A[n] = AW @ rotation_part(np.array(mat9(pm))[:3, :3])
         frames.append((t, A))
 
     # pick g by foot-trajectory fidelity vs the authored clip
@@ -303,9 +426,21 @@ def main():
         b = np.array(b) - np.mean(b)
         d = float(np.linalg.norm(a) * np.linalg.norm(b))
         return float(a @ b) / d if d > 1e-9 else 0.0
-    # normalize by skeleton height ratio between clip and roblox rig
-    zs = [(AWfull @ b.matrix_local)[2][3] for b in arm.data.bones]
-    clip_h = max(zs) - min(zs)
+    # k converts clip units to rig studs, for the root motion and the
+    # g-scoring truth ranges. It is the LEG-CHAIN ratio (hip joint -> knee ->
+    # ankle, both sides) between the rig's rest and the clip's bind: the
+    # hips' height over the feet is what root motion must keep in proportion.
+    # The overall-height ratio it replaces measured the clip's bone-head span
+    # after the rename/merge had removed the head-end and toe bones, which on
+    # a library skeleton spans about hips-to-skull (1.24 of a 1.70 mesh) while
+    # the rig height is feet-to-crown, so root motion came out 1.37x too large
+    # (witnessed 2026-09-23: a death's 0.84-unit hip drop moved 47 studs where
+    # the rig-to-clip scale, 41.2 studs a unit by a fit of the rig mesh, gives
+    # 34.5; the leg ratio gives 41.15).
+    def _leg(pos):
+        return sum(float(np.linalg.norm(pos[side + b] - pos[side + a]))
+                   for side in ("Left", "Right") for a, b in (("UpperLeg", "LowerLeg"), ("LowerLeg", "Foot")))
+    clip_leg = _leg({n: np.array((AWfull @ arm.data.bones[src[n]].matrix_local).translation) for n in names})
 
     # all 24 proper axis-aligned rotations (signed permutation matrices,
     # det +1): the 5-candidate shortlist missed the right frame on the
@@ -323,7 +458,12 @@ def main():
     for n in order:
         pr = rb[n]["parent"]
         Pw[n] = np.array(rb[n]["pos"])
-    k = rig_h / clip_h if clip_h > 0 else 1.0
+    # the rig's leg bones in its rest: a bone's pos is its offset from the parent
+    rig_leg = sum(float(np.linalg.norm(Pw[side + b])) for side in ("Left", "Right") for b in ("LowerLeg", "Foot"))
+    if clip_leg <= 1e-9 or rig_leg <= 1e-9:
+        raise ValueError(f"leg chain has no length (clip {clip_leg}, rig {rig_leg}): cannot scale root motion")
+    k = rig_leg / clip_leg
+    print(f"k = {k:0.4f} studs per clip unit (leg chain: rig {rig_leg:0.3f} studs, clip {clip_leg:0.4f} units)")
     def min_rot(a, b):
         """Smallest rotation matrix taking unit-ish vector a onto b."""
         a = a / np.linalg.norm(a)
@@ -422,13 +562,15 @@ def main():
     # impact_height. The retired script also emitted a `.luau` twin that built the
     # sequence Studio-side; the rbxmx writer replaces it, so it is gone.
     jhier = {n: (d["parent"] if d["parent"] != "HumanoidRootPart" else False) for n, d in rb.items()}
-    jframes = []
-    traj = {n: [] for n in TRAJ_BONES}
-    root_range = np.zeros(3)
+    # Pass 1: every frame's transferred rotations, the Bone.Transform quats and
+    # each bone origin's rig-frame position with NO root motion (WPr), plus the
+    # proportional hips delta. Root motion is added in pass 2, once the
+    # vertical is known: root motion shifts every bone by the same vector, so
+    # it can be added after the fact.
+    roots = [n for n in order if rb[n]["parent"] == "HumanoidRootPart"]
+    per_frame = []
     for fi, (t, A) in enumerate(frames):
-        W, WP, T = {}, {}, {}
-        p = {}
-        r = {}
+        W, WPr, p = {}, {}, {}
         for n in order:
             pr = rb[n]["parent"]
             delta = g @ (A[n] @ Bw[n].T) @ g.T
@@ -436,33 +578,49 @@ def main():
             Wp = W.get(pr, np.eye(3))
             # same accumulation foot_traj scores with, kept for every bone so the
             # hand chains resolve too: rig-frame position of each bone's origin
-            WP[n] = WP.get(pr, np.zeros(3)) + (Wp @ Pw[n])
-            if emit_root and pr == "HumanoidRootPart":
-                # root motion: hips delta from the bind pose, mapped into the rig
-                # frame by the same g the rotations use, scaled to studs by the
-                # height ratio, then expressed in the root bone's own rest frame
-                # (a Pose CFrame position is applied inside the bone's rest
-                # rotation, like Bone.Transform). The HumanoidRootPart itself
-                # never moves: the rig's physics box keeps standing, the mesh
-                # crouches, kneels or lies down inside it.
-                droot = k * (g @ (hips[fi] - rest_hips))
-                WP[n] = WP[n] + droot
-                local = m3(rb[n]["rot"]).T @ droot
-                r[n] = [round(float(v), 4) for v in local]
-                root_range = np.maximum(root_range, np.abs(droot))
-            T[n] = m3(rb[n]["rot"]).T @ Wp.T @ W[n]
-            p[n] = [round(v, 5) for v in quat(T[n])]
+            WPr[n] = WPr.get(pr, np.zeros(3)) + (Wp @ Pw[n])
+            p[n] = [round(v, 5) for v in quat(m3(rb[n]["rot"]).T @ Wp.T @ W[n])]
+        # root motion: hips delta from the reference, mapped into the rig frame
+        # by the same g the rotations use and scaled to studs by k
+        per_frame.append((t, W, WPr, p, k * (g @ (hips[fi] - rest_hips))))
+    ground = None
+    if emit_root and root_y == "ground":
+        # Ground lock: the vertical root offset puts the rig's lowest skinned
+        # vertex on its rest level (the ground the rig was fitted to) on every
+        # frame; the horizontal keeps the proportional delta. A proportional
+        # hips delta cannot do this: library clips are not grounded against
+        # their own bind (a walk's lowest foot swings 8 studs under and 4 over
+        # it, a death sinks 14, an idle with a keyed hips scale hovers 3-4),
+        # and the rig drops the clip's toe joints (witnessed 2026-09-23).
+        low, ground = ground_lows(rig_mesh, arm, rb, order, Rw, Pw, [(W, WPr) for _t, W, WPr, _p, _h in per_frame])
+    jframes = []
+    traj = {n: [] for n in TRAJ_BONES}
+    root_range = np.zeros(3)
+    for fi, (t, W, WPr, p, hdelta) in enumerate(per_frame):
+        droot = np.zeros(3)
         frame_doc = {"t": round(t, 4), "p": p}
-        if r:
-            frame_doc["r"] = r
+        if emit_root:
+            droot = hdelta.copy()
+            if ground is not None:
+                droot[1] = ground["rest_low"] - low[fi]
+            # expressed in the root bone's own rest frame (a Pose CFrame
+            # position is applied inside the bone's rest rotation, like
+            # Bone.Transform). The HumanoidRootPart itself never moves: the
+            # rig's physics box keeps standing, the mesh crouches, kneels or
+            # lies down inside it.
+            frame_doc["r"] = {n: [round(float(v), 4) for v in m3(rb[n]["rot"]).T @ droot] for n in roots}
+            root_range = np.maximum(root_range, np.abs(droot))
         jframes.append(frame_doc)
         for n in TRAJ_BONES:
-            if n in WP:
-                traj[n].append([round(t, 4), float(WP[n][0]), float(WP[n][1]), float(WP[n][2])])
+            if n in WPr:
+                q = WPr[n] + droot
+                traj[n].append([round(t, 4), float(q[0]), float(q[1]), float(q[2])])
     doc = {"hier": jhier, "frames": jframes, "traj": traj,
            "clip_seconds": frames[-1][0], "source": os.path.basename(clip_path),
            "root_motion": bool(emit_root), "root_ref": root_ref, "g": g_name, "g_forced": forced_g is not None,
            "root_range_studs": [round(float(v), 3) for v in root_range],
+           "k": round(float(k), 5), "k_source": "leg_chain",
+           "root_y": root_y if emit_root else None, "ground": ground,
            "trim": [t_start, t_end] if trim is not None else None}
     if emit_root:
         print(f"root motion: max |hips delta| xyz {[round(float(v), 2) for v in root_range]} studs")
