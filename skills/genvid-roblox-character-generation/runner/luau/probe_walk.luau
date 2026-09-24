@@ -44,4 +44,8 @@ if conn then conn:Disconnect() end
 
 local travel = (hrp.Position - start).Magnitude
 model:Destroy()
-print("RUNNER_RESULT " .. HttpService:JSONEncode({ travel = travel, falls = falls, maxTilt = maxTilt }))
+-- Returned as well as printed: execute_luau hands back the chunk's return
+-- value, not its console output.
+local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ travel = travel, falls = falls, maxTilt = maxTilt })
+print(runnerResult)
+return runnerResult

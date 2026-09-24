@@ -91,9 +91,13 @@ if minY == math.huge then minY = restY[lowest[1]] end -- no skin data: fall back
 
 local gap = minY - planeTop
 model:Destroy()
-print("RUNNER_RESULT " .. HttpService:JSONEncode({ gap = gap, lod = "{{LOD}}",
+-- Returned as well as printed: execute_luau hands back the chunk's return
+-- value, not its console output.
+local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ gap = gap, lod = "{{LOD}}",
 	measuredAt = bottom, settledMeasure = settled ~= nil,
 	-- Which context this ran in, reported rather than assumed: the far-LOD row
 	-- is only a measurement of its own when the vertex read happens in Play,
 	-- which needs the experience's Mesh & Image API setting.
-	inPlay = RunService:IsRunning() }))
+	inPlay = RunService:IsRunning() })
+print(runnerResult)
+return runnerResult

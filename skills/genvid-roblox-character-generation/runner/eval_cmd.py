@@ -27,9 +27,10 @@ here: a stage module either conforms to them or this file is updated to match):
   - `<out_dir>/silhouette.json`: silhouette_iou.py's own `out.json` argument,
     `{"iou": float, "has_basecolor": bool}` -- the source for E5/E6.
   - `<out_dir>/provenance.json`: raw `genvid get-provenance` output for E27.
-  - Per-stage `attested_cost_usd` (decimal string) and, for Tripo calls,
-    `tripo_credits` (int), stored on the matching `m["stages"][stage]` entry by
-    genvid_bind at bind time -- summed for E29.
+  - The ingest records' caller-attested costs (`generated.<item>.cost`,
+    `props.<prop>.generated.<item>.cost`, `fetched.<ref>.cost`; see
+    cost.records_on) -- the USD ones summed for E29, with the unobserved and
+    non-USD records counted beside the total in eval.json's `cost`.
 
 A gate row with no evidence on disk is reported FAIL ("missing"), never PASS and
 never silently skipped -- see CLAUDE.md Ground Truth Before Claims: no assumption
@@ -40,6 +41,7 @@ import json
 import math
 from pathlib import Path
 
+import cost
 import metrics
 import timing
 
@@ -168,6 +170,7 @@ class Ctx:
         self.provenance = _load_json(self.out / "provenance.json")
         self.eval_prior = _load_json(self.out / "eval.json") or {}
         self.silhouette = _load_json(self.out / "silhouette.json")
+        self.cost_totals = cost.totals(m)
         self.clip_poses = {}
         self.clip_traj = {}
         for clip in CLIP_NAMES:
@@ -391,7 +394,8 @@ def _row_E15(ctx):
     if not times:
         return None
     raw = metrics.cycle_seconds(times)
-    return timing.scale_time(raw, ctx.m["height_studs"])
+    # as the built Walk plays: its own time_scale when `clips build` set one
+    return timing.clip_time(_dig(ctx.m, "stages.clips.items.Walk"), raw, ctx.m["height_studs"])
 
 
 def _row_E16(ctx):
@@ -450,8 +454,9 @@ def _row_E21(ctx):
     # < 1e-6`, so comparing a scaled t against raw sample times finds nothing
     # and returns inf for any character whose cadence != 1.0 (REF_HEIGHT only) --
     # descale back to raw seconds first: scale_time divides by cadence, so
-    # multiplying by cadence is its inverse.
-    raw_impact_t = impact_t * timing.cadence(ctx.m["height_studs"])
+    # multiplying by cadence is its inverse. A clip built at its own
+    # --time-scale is descaled by that instead (timing.authored_time).
+    raw_impact_t = timing.authored_time(_dig(ctx.m, "stages.clips.items.Attack"), impact_t, ctx.m["height_studs"])
     v = metrics.impact_height(traj, raw_impact_t, feet_y)
     return None if v == float("inf") else v
 
@@ -518,20 +523,17 @@ def _row_E28(ctx):
 
 
 def _row_E29(ctx):
-    total = 0.0
-    any_cost = False
-    for entry in ctx.m.get("stages", {}).values():
-        if not isinstance(entry, dict):
-            continue
-        raw = entry.get("attested_cost_usd")
-        if raw is None:
-            continue
-        try:
-            total += float(raw)
-            any_cost = True
-        except (TypeError, ValueError):
-            pass
-    return total if any_cost else None
+    """The attested USD spend across every ingest record, or None when there is
+    none (every manifest written before ingest records existed reads PEND). It is
+    a floor: unobserved and non-USD records are not in it (see _cost_detail)."""
+    usd = ctx.cost_totals["usd"]
+    return float(usd) if usd is not None else None
+
+
+def _cost_detail(ctx):
+    detail = dict(ctx.cost_totals)
+    detail["usd"] = float(detail["usd"]) if detail["usd"] is not None else None
+    return detail
 
 
 def _bound_media_count(m):
@@ -714,7 +716,7 @@ def build_rows(ctx):
         "provenance.json", _row_E27, _row_E27_check(ctx.m), ">= 1 + bound media rows")
     add("E28", "record", "no hand-tuned values", "auto", False, "stages.record", _row_E28, _no_hand_tuned, "empty")
     add("E29", "any", "cost", "auto", False, "eval.cost", _row_E29,
-        lambda v: v <= 25.0, "a full character <= $25 (+600 Tripo credits); a static prop <= $6 each")
+        lambda v: v <= 25.0, "a full character <= $25 attested USD; a static prop <= $6 each")
     return rows
 
 
@@ -786,7 +788,7 @@ def run(m, stage=None):
     result["rig"] = {"shoulder_ratio": _row_E10(ctx), "shoulder_sep_frac": _row_E10b(ctx),
                      "symmetry_min_frac": _row_E10c(ctx)}
     result["clips"] = {clip: clip_block(clip) for clip in CLIP_NAMES}
-    result["cost"] = _row_E29(ctx)
+    result["cost"] = _cost_detail(ctx)
     result.setdefault("groundfit", {})
     result.setdefault("wire", {})
     result.setdefault("record", {})

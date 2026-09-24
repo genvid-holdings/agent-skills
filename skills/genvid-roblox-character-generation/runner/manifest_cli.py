@@ -5,7 +5,8 @@ def register(sub):
     p.add_argument("--name", required=True)
     p.add_argument("--project", type=int, required=True)
     p.add_argument("--height", type=float, required=True, help="target height in studs")
-    p.add_argument("--vendor", choices=("meshy", "tripo"), required=True)
+    p.add_argument("--vendor", default=None,
+                   help="optional hint: the provider you expect to use; recorded, never enforced")
     p.add_argument("--out", required=True)
     p.add_argument("--assignee", help="email to claim the assetImage task for at every "
                     "downstream bind stage; required before any claim-emitting stage runs, "

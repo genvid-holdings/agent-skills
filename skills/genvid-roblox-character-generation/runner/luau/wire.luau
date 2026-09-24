@@ -69,7 +69,9 @@ model:SetAttribute("SkinnedRig", true)
 -- primaryAxisCorrect, automaticScalingDisabled and fallStatesDisabled, and a
 -- report that merely echoed the inputs would pass while the engine had clamped
 -- HipHeight or refused a property.
-print("RUNNER_RESULT " .. HttpService:JSONEncode({ hip = hip, expected_hip = hum.HipHeight,
+-- Returned as well as printed: execute_luau hands back the chunk's return
+-- value, not its console output.
+local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ hip = hip, expected_hip = hum.HipHeight,
 	primaryAxisCorrect = ao.PrimaryAxis == Vector3.yAxis,
 	automaticScalingDisabled = not hum.AutomaticScalingEnabled,
 	fallStatesDisabled = not hum:GetStateEnabled(Enum.HumanoidStateType.FallingDown)
@@ -77,4 +79,6 @@ print("RUNNER_RESULT " .. HttpService:JSONEncode({ hip = hip, expected_hip = hum
 	rigTypeR15 = hum.RigType == Enum.HumanoidRigType.R15,
 	noAnimationController = model:FindFirstChildWhichIsA("AnimationController", true) == nil,
 	hrpSize = { hrp.Size.X, hrp.Size.Y, hrp.Size.Z },
-	scale = model:GetScale(), meshId = mesh.MeshId, textureId = mesh.TextureID }))
+	scale = model:GetScale(), meshId = mesh.MeshId, textureId = mesh.TextureID })
+print(runnerResult)
+return runnerResult

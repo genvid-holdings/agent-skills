@@ -36,4 +36,8 @@ if ok then
 	style = "realistic"
 end
 
-print("RUNNER_RESULT " .. HttpService:JSONEncode({ style = style }))
+-- Returned as well as printed: execute_luau hands back the chunk's return
+-- value, not its console output.
+local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ style = style })
+print(runnerResult)
+return runnerResult

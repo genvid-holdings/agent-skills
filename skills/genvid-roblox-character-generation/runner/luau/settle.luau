@@ -33,5 +33,9 @@ task.wait(3)
 local bottom = hrp.Position.Y - hrp.Size.Y / 2 - planeTop
 local _, tiltY, _ = hrp.CFrame:ToEulerAnglesXYZ()
 model:Destroy()
-print("RUNNER_RESULT " .. HttpService:JSONEncode({ settledBottom = bottom, hip = hip,
-	hoverExcess = bottom - hip, rootSizeY = hrp.Size.Y, yaw = tiltY }))
+-- Returned as well as printed: execute_luau hands back the chunk's return
+-- value, not its console output.
+local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ settledBottom = bottom, hip = hip,
+	hoverExcess = bottom - hip, rootSizeY = hrp.Size.Y, yaw = tiltY })
+print(runnerResult)
+return runnerResult

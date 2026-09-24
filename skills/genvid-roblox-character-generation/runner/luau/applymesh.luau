@@ -23,6 +23,10 @@ assert(src, "applymesh: no MeshPart on the imported source " .. imported:GetFull
 assert(dst ~= src, "applymesh: destination and source MeshPart are the same instance")
 local meshIdBefore = dst.MeshId
 dst:ApplyMesh(src)
-print("RUNNER_RESULT " .. HttpService:JSONEncode({ applied = true, template = template:GetFullName(),
+-- Returned as well as printed: execute_luau hands back the chunk's return
+-- value, not its console output.
+local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ applied = true, template = template:GetFullName(),
 	meshIdBefore = meshIdBefore, meshId = dst.MeshId, textureId = dst.TextureID,
-	changed = dst.MeshId ~= meshIdBefore }))
+	changed = dst.MeshId ~= meshIdBefore })
+print(runnerResult)
+return runnerResult

@@ -24,6 +24,7 @@ Claim the task that matches what you are generating:
 |---|---|---|
 | asset image (cast / location / prop / style / ...) | `asset` | `assetImage` |
 | music cue | `asset` | `assetAudio` |
+| asset **3D model** (a generated mesh bound to an asset) | `asset` | `assetImage` |
 | shot first frame, last frame, or keyframe | `shot` | `keyframe` |
 | shot video | `shot` | `video` |
 | shot dialogue or sound effect (audio) | `shot` | `audio` |
@@ -89,7 +90,7 @@ The `@` prefix streams the file itself — full resolution, byte-for-byte, signe
 | `filename` | A filename whose extension sets the content type (e.g. `flux.png`) |
 | `model_provider` | The provider you generated through (e.g. `fal`), as you used it — also selects the vetted CDN allowlist for `source_url` |
 | `model_name` | The model you generated with (e.g. `fal-ai/flux/schnell`), as you used it |
-| `render_type` | The generation mode of the media (`T2I`, `I2V`, ...) |
+| `render_type` | The generation mode of the media — `T2I` / `I2I` for stills, `T2V` / `I2V` / `KF2V` for video, `TTS` / `S2S` / `T2A` / `T2M` for audio, and **`T23D` / `I23D` for a generated 3D mesh**. Never `upload`, `none` or `EXTERNAL_COMP`: those say the file was not generated, and using one on this route makes a generated asset read as a hand-uploaded file with no author. |
 | `prompt` | The prompt you used, as you used it |
 | `params` | The params you used, as a JSON object string (e.g. `{"seed": 7, "steps": 4}`) |
 | `input_media_ids` | Optional: existing Genvid media ids you used as references/inputs — recorded as signed ingredient provenance |
@@ -212,6 +213,49 @@ other path to it.
 Pricing caveat (all lanes): `get_cost_estimate` prices against **Genvid's model catalog** (the response says so in `cost_basis`); since you generate with your own model and key, your actual cost is whatever your provider charges, not that catalog figure — treat it as a rough planning proxy only. For a real pre-spend check, use `check_generation_budget` (Step 0b) with YOUR OWN provider's price; for the record of what you actually spent, attest it on the bind (`attested_cost_amount`/`attested_cost_currency`, required — see the param table in Step 2) and read `budget_status` back from the response.
 
 ---
+
+## Generating a 3D model for an asset
+
+A generated mesh binds here like any other generation — the media being 3D
+changes nothing about which path you use. What decides the path is **where the
+bytes are**, and a generator that wrote a `.glb` or `.fbx` to your disk puts
+them squarely on this one.
+
+1. **Claim the asset's task.** `assetImage` is the task for an asset anchor,
+   mesh included — the name is about the anchor, not the file type.
+2. **Generate with your own tool.** Anything that leaves you holding a mesh
+   file: a hosted 3D provider, a local pipeline, a browser-driven tool you
+   downloaded the result from.
+3. **Bind it with the CLI**, because a mesh is a local file, not a hosted URL:
+
+```sh
+genvid import-generated-media <project-id> -c multipart \
+  'rendered_output: @/path/to/character.glb, model_provider: <your generator>,
+   model_name: <the model you used>, render_type: T23D,
+   link_type: cast_member_model, asset_id: <asset-id>,
+   prompt: <the prompt you used>, params: {}'
+```
+
+`render_type` is **`T23D`** for text-to-3D or **`I23D`** for image-to-3D.
+`link_type` is the `*_model` slot matching the asset's type —
+`cast_member_model`, `prop_model`, `location_model`, `costume_model`,
+`set_dressing_model`, `vehicle_model`, `greenery_model`, `livestock_model`,
+`makeup_hair_model`, `inspiration_model`, `extra_model`. The file must be `.glb` or `.fbx`,
+and its kind has to agree with the slot: a `.glb` filed under `..._image` is
+rejected.
+
+Add `target` and `stage` when the mesh is destined for a platform pipeline —
+`target: roblox, stage: roblox/r15-rigged` — which is what makes it
+conformance-checkable later.
+
+**The one case that does NOT belong here.** A mesh generated *inside* a
+platform that keeps the bytes — a Roblox `generate_mesh` /
+`GenerateModelAsync` result addressed only as `rbxassetid://` — cannot be
+uploaded, because no party holds fetchable bytes. That one registers instead;
+see `genvid-roblox-character-generation` §5.0 for the decision and §5.1 for the
+call. Registration stamps `render_type = 'upload'` and records the platform's
+durable IDs rather than a generator attestation, so reaching for it with a
+local file you *could* have bound here leaves the asset attributed to nobody.
 
 ## What Genvid attests, and what it does not
 

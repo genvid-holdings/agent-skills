@@ -21,5 +21,9 @@ local biomeFolder = propsFolder:FindFirstChild("{{BIOME}}") or Instance.new("Fol
 local prev = biomeFolder:FindFirstChild("{{PROP}}")
 if prev then prev.Name = "{{PROP}}_prev_" .. os.time() end -- never delete; the orchestrator asks before removing
 mesh.Name = "{{PROP}}"; mesh.Parent = biomeFolder
-print("RUNNER_RESULT " .. HttpService:JSONEncode({ parked = mesh:GetFullName(),
-	anchored = mesh.Anchored, canCollide = mesh.CanCollide }))
+-- Returned as well as printed: execute_luau hands back the chunk's return
+-- value, not its console output.
+local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ parked = mesh:GetFullName(),
+	anchored = mesh.Anchored, canCollide = mesh.CanCollide })
+print(runnerResult)
+return runnerResult

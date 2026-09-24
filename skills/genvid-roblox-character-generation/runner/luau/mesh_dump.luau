@@ -63,4 +63,8 @@ for i = 1, #obj, CHUNK do
 	chunkCount = chunkCount + 1
 	print("RUNNER_CHUNK " .. chunkCount .. " " .. string.sub(obj, i, i + CHUNK - 1))
 end
-print("RUNNER_RESULT " .. HttpService:JSONEncode({ chunks = chunkCount, vertices = vertexCount, faces = faceCount }))
+-- Returned as well as printed: execute_luau hands back the chunk's return
+-- value, not its console output.
+local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ chunks = chunkCount, vertices = vertexCount, faces = faceCount })
+print(runnerResult)
+return runnerResult

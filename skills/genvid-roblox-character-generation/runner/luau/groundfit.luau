@@ -72,8 +72,12 @@ look.Weight = 0.6
 -- soleOffsetAttribute is read back off the model, not echoed: the anchored-
 -- placement consumer reads the ATTRIBUTE, so the attribute is what has to be
 -- shown to have landed.
-print("RUNNER_RESULT " .. HttpService:JSONEncode({ hipHeight = hip, feetPlane = minY,
+-- Returned as well as printed: execute_luau hands back the chunk's return
+-- value, not its console output.
+local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ hipHeight = hip, feetPlane = minY,
 	rootSize = { rootSize.X, rootSize.Y, rootSize.Z }, lowerTorsoY = lt.Y, upperTorsoY = ut.Y,
 	soleOffset = sole, soleOffsetAttribute = model:GetAttribute("{{SOLE_ATTR}}"),
 	targetHeight = height,
-	rigTypeR15 = hum.RigType == Enum.HumanoidRigType.R15 }))
+	rigTypeR15 = hum.RigType == Enum.HumanoidRigType.R15 })
+print(runnerResult)
+return runnerResult

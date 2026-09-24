@@ -1,5 +1,6 @@
 """KeyframeSequence .rbxmx writer from poses JSON (world-space transfer output).
-Rojo syncs the file into ServerStorage/Assets/Anims; a human publishes with Save to Roblox."""
+Rojo syncs the file into ServerStorage/Assets/Anims, where the `build_kfs` Studio
+step verifies it and `publish_clip` publishes it."""
 import re
 from pathlib import Path
 from xml.sax.saxutils import escape
@@ -38,7 +39,7 @@ def _pose_xml(name, rot, children, ref, pos=(0.0, 0.0, 0.0)):
             "<float name=\"Weight\">1</float><token name=\"EasingDirection\">0</token>"
             "<token name=\"EasingStyle\">0</token></Properties>%s</Item>" % (ref, escape(name), _cframe_xml(rot, pos), inner))
 
-def write(poses, path, *, name, height_studs, loop, priority, root_scale=1.0):
+def write(poses, path, *, name, height_studs, loop, priority, root_scale=1.0, root_node=True, time_scale=None):
     hier = poses["hier"]
     kids = {}
     for bone, parent in hier.items():
@@ -57,7 +58,9 @@ def write(poses, path, *, name, height_studs, loop, priority, root_scale=1.0):
         return _pose_xml(bone, rot, [pose(c, p, r) for c in sorted(kids.get(bone, []))], ref(), pos)
     frames = []
     for fr in poses["frames"]:
-        t = timing.scale_time(fr["t"], height_studs)
+        # time_scale None: the sqrt-cadence stretch for this height; a number
+        # multiplies the authored times instead (1 keeps the authored cadence)
+        t = timing.scale_time(fr["t"], height_studs) if time_scale is None else fr["t"] * float(time_scale)
         r = fr.get("r") or {}
         # The pose tree must mirror the rig's real bone chain for a TRANSLATION to
         # apply: on the R15-converted skinned rigs the root bone under
@@ -67,9 +70,12 @@ def write(poses, path, *, name, height_studs, loop, priority, root_scale=1.0):
         # drops the root translation (witnessed 2026-09-08: four pose-tree
         # variants, only HumanoidRootPart > HumanoidRootNode > LowerTorso moved
         # the hips). The node pose is identity; root motion rides on LowerTorso.
-        node = _pose_xml(ROOT_NODE, [[1,0,0],[0,1,0],[0,0,1]],
-                         [pose(c, fr["p"], r) for c in sorted(kids.get("HumanoidRootPart", []))], ref())
-        root = _pose_xml("HumanoidRootPart", [[1,0,0],[0,1,0],[0,0,1]], [node], ref())
+        # A rig with no such bone (`root_node=False`) takes the translation on
+        # HumanoidRootPart > LowerTorso instead (witnessed 2026-09-10).
+        bones = [pose(c, fr["p"], r) for c in sorted(kids.get("HumanoidRootPart", []))]
+        if root_node:
+            bones = [_pose_xml(ROOT_NODE, [[1,0,0],[0,1,0],[0,0,1]], bones, ref())]
+        root = _pose_xml("HumanoidRootPart", [[1,0,0],[0,1,0],[0,0,1]], bones, ref())
         frames.append("<Item class=\"Keyframe\" referent=\"%s\"><Properties><string name=\"Name\">Keyframe</string>"
                       "<float name=\"Time\">%.5f</float></Properties>%s</Item>" % (ref(), t, root))
     xml = ("<roblox version=\"4\"><Item class=\"KeyframeSequence\" referent=\"%s\"><Properties>"

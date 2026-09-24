@@ -4,11 +4,13 @@ Orchestrator protocol per Studio step:
 
     runner studio emit <step> --manifest m            # writes <out>/studio/<step>.luau
     <execute it in Studio; Edit mode, except treadmill/probe_walk/settle, which need Play>
-    <copy the RUNNER_RESULT console line into <out>/studio/<step>.result.json>
+    <save the RUNNER_RESULT line the step returns into <out>/studio/<step>.result.json>
     runner studio ingest <step> --manifest m <file>
 
-The result file may hold either the bare JSON object or the console line verbatim
-(`RUNNER_RESULT {...}`); `ingest` accepts both.
+Every step both prints and returns that line, since `execute_luau` hands back a
+script's return value and not its console output. The result file may hold
+either the bare JSON object or the line verbatim (`RUNNER_RESULT {...}`);
+`ingest` accepts both.
 
 The two eval probes are steps here too, and land in `<out>/eval.json` where
 eval_cmd's E13/E14/E24 rows read them -- never in the manifest, since they measure
@@ -70,8 +72,8 @@ STAGE_OF = {"inspect_template": "rest", "scale": "rest", "dump_rest": "rest", "g
             "capture_ids": "wire", "treadmill": "clips", "treadmill_scaled": "clips", "zoo_capture": "wire",
             "probe_feet": "groundfit", "probe_walk": "wire",
             # build_kfs / publish_clip are the in-Studio half of the clips stage:
-            # the KeyframeSequence is built from the served poses JSON and then
-            # published with AssetService:CreateAssetAsync.
+            # the KeyframeSequence `clips build` wrote and Rojo synced is verified
+            # read-only, then published with AssetService:CreateAssetAsync.
             "build_kfs": "clips", "publish_clip": "clips",
             # applymesh is the R15 surface pass: it swaps the MeshPart on an
             # ALREADY-parked, already-recorded template, so it lands on "rig" (where the
@@ -248,7 +250,46 @@ def set_park_folder(m, folder):
     return m
 
 
+def require_verified(m, clip, clip_name, unverified_ok=None):
+    """Refuse to emit `publish_clip` until `studio ingest build_kfs` has
+    verified the title being published. Checked in emit() so every route is
+    gated: `clips publish-clip`, `studio emit publish_clip --param CLIP=...
+    --param CLIP_NAME=...`, and a caller's own studio.emit.
+
+    A CLIP that is not on stages.clips.items has no build record to verify, so
+    it is refused too, unless the caller passes `UNVERIFIED_OK=<reason>`; the
+    reason is written to the manifest's notes. Clips a title builds per attack
+    archetype belong on the manifest as items, which is what makes them
+    verifiable."""
+    item = (((m.get("stages") or {}).get("clips") or {}).get("items") or {}).get(clip)
+    if item is None:
+        if not unverified_ok:
+            raise ValueError(
+                "publish_clip %s: CLIP %r is not on stages.clips.items, so no `clips build` record exists to verify "
+                "it against. Transfer and build it as a manifest item (`clips transfer`/`clips build`, then "
+                "build-kfs + ingest + `clips publish-clip`), or pass --param UNVERIFIED_OK=<reason> to publish it "
+                "unverified; the reason is recorded" % (clip_name, clip))
+        manifest.note(m, "publish_clip %s (CLIP %s) emitted UNVERIFIED: %s" % (clip_name, clip, unverified_ok))
+        manifest.save(m)
+        return
+    built = item.get("kfs_name")
+    verified = (item.get("kfs_verified") or {}).get("name")
+    if not built:
+        raise ValueError("publish_clip %s: clip %s has no `clips build` record; run `clips build --clip %s`, the Rojo "
+                         "sync, `clips build-kfs` and `studio ingest build_kfs`, then `clips publish-clip`"
+                         % (clip_name, clip, clip))
+    if clip_name != built:
+        raise ValueError("publish_clip %s: `clips build` last wrote %s for clip %s; publish that title with "
+                         "`clips publish-clip --clip %s`" % (clip_name, built, clip, clip))
+    if verified != built:
+        raise ValueError("publish_clip %s: not verified in Studio%s; run `clips build-kfs --clip %s`, execute the "
+                         "step, then `studio ingest build_kfs --clip %s <result>`, then `clips publish-clip`"
+                         % (built, " (the last verify read %s)" % verified if verified else "", clip, clip))
+
+
 def emit(m, step, **params):
+    if step == "publish_clip":
+        require_verified(m, params.get("CLIP"), str(params.get("CLIP_NAME")), params.pop("UNVERIFIED_OK", None))
     template = manifest.template_name(m)
     # Manifest first, registered/pack default second: `studio.park_folder` is the
     # per-character override, so it has to beat a default register_steps merged in.
@@ -284,7 +325,7 @@ def emit(m, step, **params):
 
 
 def _read_result(result_path):
-    """The orchestrator may paste the console line verbatim; that line is not JSON."""
+    """The orchestrator may paste the returned line verbatim; that line is not JSON."""
     raw = Path(result_path).read_text().strip()
     if raw.startswith(RESULT_PREFIX):
         raw = raw[len(RESULT_PREFIX):]
@@ -310,6 +351,71 @@ def _write_eval(m, dotted, value):
     doc.setdefault(section, {})[key] = value
     p.write_text(json.dumps(doc, indent=2, sort_keys=True, default=str))
     return p
+
+
+# build_kfs read-back tolerances. Keyframe times are written to 5 decimals and
+# read back as float32; a model scale is read back as a float.
+KFS_TIME_TOL = 1e-3
+KFS_SCALE_TOL = 1e-3
+
+
+class KfsMismatch(ValueError):
+    """The KeyframeSequence in Studio is not the one `clips build` recorded."""
+
+
+def check_kfs(clip, item, data):
+    """Compare a `build_kfs` read-back with the `kfs_expected` record `clips
+    build` left on the clip item; raise KfsMismatch naming every difference.
+    Nothing is recorded for a sequence that fails: publishing it would publish
+    something other than what the manifest says was built."""
+    exp = item.get("kfs_expected")
+    name = item.get("kfs_name")
+    rebuild = ("`clips build --clip %s --anims-dir <the Rojo-mapped animations directory>`, then let Rojo sync "
+               "it into ServerStorage.Assets.Anims and re-run build_kfs" % clip)
+    if not exp or not name:
+        raise KfsMismatch("build_kfs: clip %s has no `clips build` record (kfs_name, kfs_expected) to verify "
+                          "against; run %s" % (clip, rebuild))
+    if not data.get("found"):
+        raise KfsMismatch("build_kfs: ServerStorage.Assets.Anims.%s is not in the place. Run %s. The step no "
+                          "longer builds the sequence in Studio: execute_luau has no Network capability since "
+                          "Studio 0.739" % (data.get("name") or name, rebuild))
+    if not data.get("isKfs"):
+        raise KfsMismatch("build_kfs: ServerStorage.Assets.Anims.%s is not a KeyframeSequence" % data.get("name"))
+    problems = []
+    if data.get("name") != name:
+        problems.append("name %r, but `clips build` last wrote %r" % (data.get("name"), name))
+    if data.get("keyframes") != exp["keyframes"]:
+        problems.append("%s keyframes, expected %s" % (data.get("keyframes"), exp["keyframes"]))
+    if abs(float(data.get("lastTime") or 0) - float(exp["last_time"])) > KFS_TIME_TOL:
+        problems.append("last keyframe at %.5f s, expected %.5f s (time scale %s)" % (
+            float(data.get("lastTime") or 0), float(exp["last_time"]), exp.get("time_scale")))
+    if bool(data.get("loop")) != bool(exp["loop"]):
+        problems.append("Loop %s, expected %s" % (data.get("loop"), exp["loop"]))
+    if data.get("priority") != exp["priority"]:
+        problems.append("Priority %r, expected %r" % (data.get("priority"), exp["priority"]))
+    if exp["keyframes"] and data.get("rootPose") != "HumanoidRootPart":
+        problems.append("root pose %r, expected 'HumanoidRootPart'" % data.get("rootPose"))
+    if bool(data.get("rootNode")) != bool(exp["root_node"]):
+        problems.append("HumanoidRootNode pose %s, expected %s" % (
+            "present" if data.get("rootNode") else "absent", "present" if exp["root_node"] else "absent"))
+    if problems:
+        raise KfsMismatch("build_kfs: ServerStorage.Assets.Anims.%s is not the sequence `clips build` recorded "
+                          "(%s). Run %s" % (data.get("name"), "; ".join(problems), rebuild))
+    # Against the template it will play on (SKILL.md clip transfer laws 3-5).
+    if not data.get("templateFound"):
+        raise KfsMismatch("build_kfs: the template is not under the park folder, so the root-node and scale "
+                          "checks cannot run; park it (or fix studio.park_folder) and re-run build_kfs")
+    if bool(data.get("templateHasNode")) != bool(exp["root_node"]):
+        raise KfsMismatch(
+            "build_kfs: the template %s a HumanoidRootNode bone but the sequence was built %s the node pose, so "
+            "the Animator would drop its root translation. Record the rig's shape (adopt_inspect for an adopted "
+            "rig) and run %s" % ("has" if data.get("templateHasNode") else "has no",
+                                 "without" if exp["root_node"] else "with", rebuild))
+    scale, built = float(data.get("templateScale") or 0), float(exp["root_scale"])
+    if exp.get("root_motion") and abs(scale - built) > KFS_SCALE_TOL * max(1.0, abs(built)):
+        raise KfsMismatch(
+            "build_kfs: the template's scale is %.4f but the root motion was divided by %.4f at `clips build` "
+            "(stages.wire.result.scale); ingest the scale/wire step that set it and run %s" % (scale, built, rebuild))
 
 
 def _dig_result(m, key):
@@ -341,7 +447,7 @@ def ingest(m, step, result_path, lod=None, clip=None):
         _write_eval(m, "wire.walk_probe", data)
         return data
     if step in ("build_kfs", "publish_clip", "bench_clip"):
-        # Which logical clip this run built, published or benched cannot be
+        # Which logical clip this run verified, published or benched cannot be
         # inferred from the result (the Luau reports the PUBLISHED title, not
         # the catalog key), so it is named rather than assumed -- the same rule
         # probe_feet's --lod follows.
@@ -352,7 +458,8 @@ def ingest(m, step, result_path, lod=None, clip=None):
                              % (step, clip, sorted(items) or "none"))
         item = dict(items[clip])
         if step == "build_kfs":
-            item["built_in_studio"] = data
+            check_kfs(clip, item, data)
+            item["kfs_verified"] = data
         elif step == "bench_clip":
             timeline = data.pop("timeline", None)
             if timeline is not None:
@@ -394,7 +501,7 @@ def ingest(m, step, result_path, lod=None, clip=None):
         # An adopted rig's wire stage IS this reading: scale (clips.build's
         # root_scale), hip/sole (the bench's sole plane), and whether the rig has
         # a HumanoidRootNode. Refusing a zero scale or a missing hip beats
-        # recording a manifest that build_kfs would silently mis-scale.
+        # recording a manifest that `clips build` would silently mis-scale.
         assert (data.get("scale") or 0) > 0, "adopt_inspect: scale must be positive: %r" % (data,)
         assert (data.get("hip") or 0) > 0, "adopt_inspect: hip (HipHeightStuds) must be positive: %r" % (data,)
         assert isinstance(data.get("bones"), list) and data["bones"], "adopt_inspect: bones list missing: %r" % (data,)
@@ -482,5 +589,5 @@ def register(sub):
     i = s.add_parser("ingest"); i.add_argument("step", choices=STEPS); i.add_argument("--manifest", required=True)
     i.add_argument("--lod", choices=LODS, default=None, help="probe_feet only: which LOD this result measured")
     i.add_argument("--clip", default=None,
-                   help="build_kfs / publish_clip / bench_clip only: which clip this result built, published or benched")
+                   help="build_kfs / publish_clip / bench_clip only: which clip this result verified, published or benched")
     i.add_argument("result"); i.set_defaults(func=_ingest_cli)
