@@ -17,4 +17,8 @@ for _, n in R15 do
 	local x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22 = b.CFrame:GetComponents()
 	out[n] = { parent = pname, rot = { r00, r01, r02, r10, r11, r12, r20, r21, r22 }, pos = { x, y, z } }
 end
-print("RUNNER_RESULT " .. HttpService:JSONEncode(out))
+-- Returned as well as printed: execute_luau hands back the chunk's return
+-- value, not its console output.
+local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode(out)
+print(runnerResult)
+return runnerResult

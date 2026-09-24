@@ -39,4 +39,8 @@ for i = 2, #samples do
 	end
 end
 m:Destroy()
-print("RUNNER_RESULT " .. HttpService:JSONEncode({ strideStudsPerSec = n > 0 and sum / n or 0, samples = #samples, clipLength = track.Length }))
+-- Returned as well as printed: execute_luau hands back the chunk's return
+-- value, not its console output.
+local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ strideStudsPerSec = n > 0 and sum / n or 0, samples = #samples, clipLength = track.Length })
+print(runnerResult)
+return runnerResult

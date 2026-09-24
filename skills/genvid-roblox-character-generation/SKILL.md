@@ -98,20 +98,42 @@ read-then-claim-or-reopen before any bind you run by hand against an asset you
 did not just create. Writing the reopen payload is not enough on its own: the
 reopen has to have *run* before the bind, or the bind still lands on the
 `approved` task and 409s — a fire-and-forget reopen followed by the bind on
-the next line is the same race. The runner enforces this by refusing to bind
-until you record the task's post-reopen `workflow_status` on the manifest.
+the next line is the same race. The runner reads the task itself with
+`genvid list-tasks` (the project's organization id from `genvid get-project`)
+and stores the command, the raw response and the time next to the status in
+the manifest's `claims`. After a reopen it refuses the bind until a fresh read
+answers `in_progress`: run the reopen payload, then re-run the stage. Nobody
+records a status by hand.
 
 **Bind every variant you would show a human, including the ones you expect to
 lose.** A/B forks are the point of plate craft (see the variant-editing rule in
 §1), and the rejected candidates are what make an approval legible later.
 
-**Keep the provider's result URL.** Hosted providers (fal and most others)
-return a result URL; pass it as `source_url` and Genvid pulls the bytes itself.
-A runner that downloads the image and discards the URL forces you onto the
-local-file path for no reason. If you *do* only have a local file, bind it with
-`genvid import-generated-media <project-id> -c multipart 'rendered_output: @<path>, ...'`
-— **never `image_base64`**, which silently truncates a full-resolution image and
+**Bind the artifact the next stage consumed.** When the provider's bytes are
+the artifact and Genvid has vetted that provider's result CDN, pass the
+provider's result URL as `source_url` and Genvid pulls the bytes itself; a
+runner that downloads the result and discards the URL forces the local-file
+path for no reason. For any other provider, bind the downloaded file with the
+CLI multipart path below. When the bytes were changed locally
+(decimation, facing normalization, a format conversion), the artifact is the
+processed file, not the provider's result. Bind that file with
+`genvid import-generated-media <project-id> -c multipart 'rendered_output: @<path>, ...'`.
+A `source_url` for the processed file works only when that file is hosted on
+the attested provider's vetted result CDN; Genvid refuses any other host.
+Never bind the provider's original result URL in its place: every downstream
+row then records a parent whose bytes that stage never read.
+**Never `image_base64`**, which silently truncates a full-resolution file and
 leaves Genvid signing a corrupt file that looks successful.
+
+**A bind that timed out may already have landed.** Send an
+`--idempotency-key` on every CLI bind, and retry a timed-out bind with that
+same key, never a new one: the server can finish the bind after the client
+gives up, and a retry without the key creates a duplicate row. The MCP
+`ingest_generated_media` tool cannot read a local file, takes no idempotency
+key, and accepts a `source_url` only on the attested provider's vetted result
+CDN. Before any MCP fallback, check the asset's media for the row; when
+the processed file is not hosted on that CDN, the CLI multipart bind is the
+only path. Do not fall back to the provider's original result URL.
 
 > **[mining]** Standing direction on the worked example's production
 > (2026-08-25): generated assets are tracked in Genvid, never only locally, and
@@ -324,7 +346,10 @@ of its characters:
   agreed. The map is a property of the source skeleton, not of the clip:
   transfer the walk first, read its pick from the poses doc (`g`), and pass
   `--g=<that name>` for every other clip on that skeleton (`poses.py` records
-  `g` and `g_forced` on every doc so a review can tell which it was).
+  `g` and `g_forced` on every doc so a review can tell which it was). The
+  runner does this for you: `clips transfer --g-from Walk` reads the Walk
+  doc's `g` and forces it (`--g <name>` forces one by name), and the clip item
+  records `g`, `g_forced` and `g_from`.
 
 **The transfer law:** in the worked example, ALL of the production's clips were
 transferred onto the Meshy-skeleton rigs by `stage_h_poses.py`'s world-space
@@ -408,11 +433,58 @@ not just functional. This section states the exact shipped call shapes —
 read it before wiring a capture, the two payload-encoding rules below are
 easy to get backwards.
 
+### 5.0 First decide WHICH path, and decide it on where the bytes are
+
+Two paths bind generated media, and the one you need is chosen by **who ends up
+holding the bytes** — never by the media being 3D.
+
+| Where the result lives | Path | What gets recorded |
+|---|---|---|
+| In Roblox's cloud — an `rbxassetid://`, which nobody can fetch bytes from | `register_media` → `finalize_media_registration` (§5.1) | durable platform identifiers + a `generation` block |
+| **On your disk, or on your provider's result CDN** | **`ingest_generated_media`** — see `genvid-agent-generation` | `model_provider` / `model_name` / `render_type` / `prompt` / `params`, signed as an AI-generation attestation |
+
+§5.1 exists because a `generate_mesh` / `GenerateModelAsync` result never
+leaves Roblox. That reasoning **does not carry to any other 3D generator.** If
+you generated a mesh with a tool that wrote a `.glb` or `.fbx` to disk — a
+hosted 3D generator you downloaded the result from, a local pipeline, anything
+you drove through a browser — Genvid can hold those bytes, so bind them and let
+the attestation carry the generator:
+
+```sh
+genvid import-generated-media <project-id> -c multipart \
+  'rendered_output: @/path/to/character.glb, model_provider: <your generator>,
+   model_name: <the model you used>, render_type: T23D,
+   link_type: cast_member_model, asset_id: <asset-id>, params: {}'
+```
+
+`target` and `stage` are omitted deliberately. They are optional as a pair, and
+together they claim a destination pipeline stage: the published vocabulary
+carries `roblox/r15-rigged` for a skinned R15 rig, and a mesh that has not been
+rigged yet satisfies neither that nor any other published stage. Add them only
+when the artifact really is at a stage the vocabulary names. A pair the
+vocabulary does not know is refused outright, and the vocabulary is not
+published anywhere a caller can read it.
+
+`render_type` is `T23D` for text-to-3D or `I23D` for image-to-3D — **never
+`upload`**, which is what registration stamps and what makes a generated asset
+read as a hand-uploaded file with no author. `link_type` is the `*_model` slot
+matching the asset's type (`cast_member_model`, `prop_model`, `location_model`,
+…). The provider name is free text, attested as you used it: a generator needs
+no prior registration with Genvid, and needs no
+`identifier_scope_vocabulary` row.
+
+**Registering a locally-generated mesh is the failure this table exists to
+prevent.** It stamps `render_type = 'upload'` and records no generator, then
+rejects the generator's own task ID at the identifier vocabulary — which is
+closed and Roblox-only by design. The result is a governed asset attributed
+to nobody.
+
 ### 5.1 Capture at call time: `register_media` → `finalize_media_registration`
 
-There is no after-the-fact discovery path for a generated Roblox asset (see
-`genvid-roblox-studio-ops` for why) — capture has to happen at the moment of
-the call. The finalize step's shape, exactly as shipped
+**Use this branch only for a mesh that stays in Roblox's cloud** — see §5.0
+before you do. There is no after-the-fact discovery path for a generated Roblox
+asset (see `genvid-roblox-studio-ops` for why) — capture has to happen at the
+moment of the call. The finalize step's shape, exactly as shipped
 (`finalize_media_registration.py`):
 
 - `storage_class = "platform"`, `locator_type = "platform_asset"` — the
@@ -649,10 +721,32 @@ legs and the corrected loop converged all three to within +-0.006 studs,
 standing and mid-walk (witnessed 2026-09-04).
 
 `build_kfs` and `publish_clip` are the two Studio steps that close the clips
-stage with no Save-to-Roblox click: `build_kfs` builds the KeyframeSequence in
-Studio from a poses JSON the runner serves over local HTTP (no Rojo sync
-needed to evaluate a clip), and `publish_clip` calls
-`AssetService:CreateAssetAsync` on it directly — confirmed on the bake-off run
+stage with no Save-to-Roblox click. The KeyframeSequence itself is built on the
+host: `clips build --anims-dir <dir>` writes `<Name><Clip>_v<N>.rbxmx` into the
+directory the title's Rojo project maps to `ServerStorage.Assets.Anims`, and
+records what the synced sequence must contain (`kfs_expected`: keyframe count,
+last keyframe time, time scale, loop, priority, root-node shape, root scale). `build_kfs` is
+a read-only Studio step that reads the synced sequence and the template back;
+`studio ingest build_kfs --clip <Clip>` compares the two and refuses a sequence
+that is missing or differs, naming the `clips build` + Rojo sync to re-run.
+`clips publish-clip` publishes the title `clips build` recorded, and only after
+that ingest has verified the same title. `studio emit publish_clip` is gated
+the same way, and refuses a CLIP that is not on `stages.clips.items` at all
+unless `--param UNVERIFIED_OK=<reason>` is passed (the reason goes into the
+manifest's notes). A title that builds one clip per attack archetype should
+put each archetype on the manifest as a clip item, so it is transferred,
+built, verified and published like any other clip; a re-run of `clips build` drops the
+earlier verification, so a rewritten file is verified again before it is
+published.
+`build_kfs` no longer builds anything in Studio and uses no Network:
+`execute_luau` runs sandboxed without the Network capability since Studio 0.739,
+so the old route (poses fetched over `HttpService` from a server the runner
+started) fails there (witnessed 2026-09-23). The rest of the clip chain runs
+under that sandbox, witnessed the same day: `HttpService:JSONEncode` (every
+step's result line), `AssetService:CreateAssetAsync` on a KeyframeSequence
+(`publish_clip`, six clips), and, in Play/Server, `Animator:LoadAnimation` of a
+published id the same account owns (`bench_clip`). `publish_clip` calls
+`AssetService:CreateAssetAsync` on the sequence directly — confirmed on the bake-off run
 to return a real Roblox asset id from the MCP bridge's Edit context; an
 earlier record that `CreateAssetAsync` rejects a MeshPart/Model never covered
 a KeyframeSequence (witnessed 2026-09-04). `wire` (same stage as `park` and
@@ -672,8 +766,7 @@ the published clip plays, and each cost a publish-and-bind round:
 1. *Root motion is emitted.* `poses.py` writes the root bone's translation per
    frame under `frames[i].r` (the hips' world delta, mapped by the same `g` as
    the rotations, scaled by rig/clip height, expressed in the root bone's
-   rest frame); `kfs.write` and `build_kfs` put it in the LowerTorso pose
-   position. A rotation-only transfer plays every crouch as legs folding under
+   rest frame); `kfs.write` puts it in the LowerTorso pose position. A rotation-only transfer plays every crouch as legs folding under
    a pelvis pinned at standing height and a fall as a torso rotating around
    hips that stay in the air (`--no-root` keeps that output; the accepted walk
    and idle were built on it and are not rebuilt).
@@ -689,13 +782,16 @@ the published clip plays, and each cost a publish-and-bind round:
 3. *The pose tree mirrors the real bone chain.* The Animator matches rotations
    by pose name whatever the tree, but it applies a TRANSLATION only when the
    tree is `HumanoidRootPart > HumanoidRootNode > LowerTorso` (four variants
-   tried; only that one moved the hips). `kfs.write` always writes the node
-   pose; `build_kfs` inserts it when the template carries that bone.
+   tried; only that one moved the hips). `clips build` writes the node pose
+   unless `stages.wire.result.hasRootNode` is false (an adopted rig without the
+   bone, law 5); `build_kfs`'s ingest refuses a sequence whose node pose
+   disagrees with the template.
 4. *The translation is divided by the model scale.* The Animator multiplies a
    pose translation by `Model:GetScale()` (a 20-stud pose moved a 0.53-scale
-   giant 10.6 studs; the same 20 on `Bone.Transform` moved 19.4). `build_kfs`
-   reads `template:GetScale()`; `kfs.write` takes `root_scale`, which
-   `clips build` feeds from `stages.wire.result.scale`.
+   giant 10.6 studs; the same 20 on `Bone.Transform` moved 19.4). `kfs.write`
+   takes `root_scale`, which `clips build` feeds from
+   `stages.wire.result.scale`; `build_kfs`'s ingest refuses a clip with root
+   motion when the template's `GetScale()` no longer matches it.
 
 5. *A clip is bound to the skeleton it was built for.* A clip built on the
    16-bone runner rig plays NOTHING useful on a 15-bone old-pipeline rig
@@ -703,16 +799,24 @@ the published clip plays, and each cost a publish-and-bind round:
    rigs hang `LowerTorso` straight under `HumanoidRootPart` with no
    `HumanoidRootNode` for the translation to ride on. Transfer onto that
    rig's own rest dump instead: with the tree `HumanoidRootPart > LowerTorso`
-   (no node, which `build_kfs` inserts only when the template has the bone)
+   (no node, which `clips build` omits when the rig records no such bone)
    the translation DOES apply on those rigs (witnessed 2026-09-10: the
    8.7-hip rig's hips moved -7.9, the 15.0-hip rig's -13.9).
 6. *Cadence follows the square root of height.* `timing.scale_time` stretches
    a clip by `sqrt(height / 8)`, so a clip authored at height H plays on a
    rig of height h at speed `sqrt(H / h)`; the game's `deathAnimSpeed` dial
    is exactly that number when one rig borrows another's clip (a 50-stud rig
-   plays a 95-stud rig's death at 1.378 = sqrt(95 / 50)). `build_kfs` needs the same
-   factor as `{{SCALE}}` (`1 / timing.cadence(height)`: 1.58 at 20 studs,
-   2.09 at 35, 2.5 at 50, 3.45 at 95).
+   plays a 95-stud rig's death at 1.378 = sqrt(95 / 50)). `kfs.write` applies
+   the same factor to every keyframe time (`1 / timing.cadence(height)`: 1.58
+   at 20 studs, 2.09 at 35, 2.5 at 50, 3.45 at 95). A clip authored on the rig
+   itself, at the cadence it should play at, is built with
+   `clips build --time-scale 1`, which keeps its authored times; any other
+   number multiplies them. The factor is recorded on the clip item
+   (`time_scale`) and in `kfs_expected`, and every timing derived from the
+   clip reads it (`timing.clip_time`): the item's `scaled_seconds` (the bound
+   row's `duration_seconds`), `attackImpactDelaySecs` (re-derived when the clip
+   is rebuilt after `clips impact`), and eval rows E15, E20 and E21. A clip
+   with no `time_scale` keeps the height stretch.
 
 And one reference rule: root motion is measured from the clip's FIRST FRAME
 (`--root-ref=first`, the default), because library clips do not all start at
@@ -720,13 +824,24 @@ the bind pose (Meshy's stun and slam start 17 to 43 studs from the T-pose
 hips at giant-character scale, which bind-relative motion turned into a mesh sitting
 off its collider for the whole clip and snapping back at the end);
 `--root-ref=bind` is for a clip that starts mid-air or crouched and should
-read that way. Check `frames[0].r` and `frames[-1].r` before publishing: an
+read that way (`clips transfer --root-ref first|bind`; `--no-root` emits the
+rotation-only doc; the item records `root_ref` and `root_motion`). Check
+`frames[0].r` and `frames[-1].r` before publishing: an
 Action clip the game holds (a stun, a death) keeps its last-frame offset for
 as long as it is held, and a clip that blends back to idle snaps from it. A
 repeating library clip (Angry_Stomp is eight seconds of stomping in place)
 is trimmed to one action before building, and its impact is the first foot
 landing after the peak lift, not the global minimum the default detector
-finds across hands and feet.
+finds across hands and feet. `clips transfer --trim START:END` does the cut:
+it keeps that range of the source clip (seconds, authored time) and re-bases
+it to start at 0 before anything reads it, so the root reference is the first
+kept frame, the axis scoring and trajectories see one action, and the
+item's `clip_seconds`/`scaled_seconds` are the trimmed length. Cut to one
+action and the default impact detector finds that action's landing. A range
+that ends past the clip, or keeps fewer than two frames, is refused; the item
+records `trim`. Re-transferring a clip drops the `attackImpact*` values
+`clips impact` measured on it (re-run `clips impact`), and `clips build`
+refuses a recorded impact time past the clip's end.
 
 **Bench before you publish, sample the right property.** The bench that
 proves a clip is a Play clone with the published id (a parked, unpublished
@@ -745,8 +860,12 @@ rejected; no proxy), then `finalize_media_registration` with
 `roblox.com` `asset_id:` identifier, `size_bytes` measured from the poses
 file (stated in `generation.params`), `duration_seconds` = the scaled
 length, and NO `target`/`stage` (the keyframesequence stage is refused).
-`clips bind` writes exactly this. Attested cost is 0 only when no vendor
-call was made (local Blender + Studio publish) -- say why in params.
+`clips bind` writes exactly this, and cites the clip's source row in
+`input_media_ids`: a generated clip's motion row, a rig-bundled clip's own row,
+nothing for an archive clip. Cost lives on the generation rows, never on the
+clip item: an item carries only `cost_source` (`rig`, `none`, or
+`clips.generated.<clip>`), and no clip row attests "0". A bundled clip's row
+omits the cost fields, since the rig's row holds the spend.
 
 **Adopting a rig that already exists (`runner rig adopt`).** A parked template
 with no manifest — the four old-pipeline characters, or a rig handed over as a
@@ -761,7 +880,9 @@ are not on it and are not pretended. The whole sequence for one new clip:
     runner rig adopt-emit --manifest ... dump_rest                                    # Edit, against the parked template
     runner studio ingest dump_rest --manifest ... <result>
     runner clips transfer --manifest ... --clip Death --candidate 1                   # archive fall (no vendor rig task on an adopted rig)
-    runner clips build-kfs --manifest ... --clip Death   # serve <out_dir> on 127.0.0.1:8765 first; Edit
+    runner clips build --manifest ... --clip Death --anims-dir <Rojo-mapped dir>        # then let Rojo sync it
+    runner clips build-kfs --manifest ... --clip Death                                # Edit, read-only verify
+    runner studio ingest build_kfs --manifest ... --clip Death <result>
     runner clips publish-clip --manifest ... --clip Death                             # Edit
     runner studio ingest publish_clip --manifest ... --clip Death <result>
     runner clips bench --manifest ... --clip Death                                    # PLAY, Server; blocks ~clip length
@@ -787,10 +908,11 @@ the field that says whether those numbers mean anything: the step schedules
 the game's own end-pose hold (`AdjustSpeed(0)` just before the clip ends);
 when `frozen` is false the track ran out first, the Animator blended the
 clone back to its bind pose, the numbers describe that standing pose, and the
-bench must be re-run. Every Studio step prints its result as one
-`RUNNER_RESULT <json>` console line; `execute_luau` returns only a script's
-return value, so read the line with `get_console_output` (expensive on a
-chatty place) or wrap the rendered step to capture `print` and return it.
+bench must be re-run. Every Studio step ends by printing its result as one
+`RUNNER_RESULT <json>` line AND returning that same line: `execute_luau`
+surfaces a script's return value, not its console output, so the call's
+return is the result to save for `studio ingest` (no `get_console_output`
+needed). `mesh_dump`'s `RUNNER_CHUNK` lines are still console-only.
 
 **Steps a per-title skill adds.** A title that needs a Studio step of its own —
 parking a static model in its own folder, or killing a live character through its
@@ -838,9 +960,22 @@ PASS, while any clip is still only "payload written."
 
 **Budget gate and cost attestation.** Every spending stage — plate, mesh, rig,
 clips, and the biome plate/sky/kit stages — calls the same `budget_gate()`:
-it writes a `check_generation_budget` MCP payload and raises rather than
-spending until the orchestrator has recorded a `fits: true` verdict back onto
-the manifest. Every Genvid bind separately requires a non-empty
+it reads the headroom itself with `genvid get-generation-budget-headroom
+<project> <estimate> [--asset-id <asset>]` (the REST read behind
+`check_generation_budget`), stores the verdict with the command, the raw
+response and the time in the manifest's `budget`, and spends only on a literal
+`fits: true`. A response for a different estimate, or with no asset headroom
+on an asset check, is refused; a refusal is read again on the next run. Every
+gate read has a 60-second timeout and names the command when it fails. The
+headroom command needs genvid CLI 0.0.5 or newer; an older CLI is refused with
+the installed version and how to upgrade (`brew upgrade genvid` or
+install.sh). No
+payload file is written and nobody records a verdict by hand: a cached
+verdict or claim status counts only when it carries the gate's own read and
+that read answers it; anything else, a hand-written `fits: true` included, is
+read again. The claim the runner writes for an unclaimed task is still a
+`create_assignment` payload: until it has run, the next bind on that asset
+stops with `ClaimPending` naming it rather than writing a second one. Every Genvid bind separately requires a non-empty
 `attested_cost_usd` decimal string; a stage with nothing to attest raises
 rather than binding silently.
 
@@ -893,7 +1028,7 @@ worth stating plainly, each of them paid for once:
     python3 runner/cli.py studio emit dump_rest --manifest ...   # then execute_luau, then studio ingest
     python3 runner/cli.py studio emit groundfit|settle|sethip --manifest ...
     python3 runner/cli.py clips transfer|build --manifest ... --clip Walk
-    python3 runner/cli.py clips build-kfs|publish-clip --manifest ... --clip Walk   # each emits a Studio step: execute_luau it
+    python3 runner/cli.py clips build-kfs|publish-clip --manifest ... --clip Walk   # each emits a Studio step: execute_luau it (build-kfs verifies the Rojo-synced build)
     python3 runner/cli.py clips bind --manifest ... --ids Walk=<RobloxAssetId>       # the id publish-clip returned
     python3 runner/cli.py studio emit wire|park|capture_ids --manifest ...
     python3 runner/cli.py record run --manifest ...

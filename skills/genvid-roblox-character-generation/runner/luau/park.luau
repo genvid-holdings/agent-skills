@@ -14,4 +14,8 @@ end
 local prev = folder:FindFirstChild("{{TEMPLATE}}")
 if prev then prev.Name = "{{TEMPLATE}}_prev_" .. os.time() end -- never delete; the orchestrator asks before removing
 model.Name = "{{TEMPLATE}}"; model.Parent = folder
-print("RUNNER_RESULT " .. HttpService:JSONEncode({ parked = model:GetFullName() }))
+-- Returned as well as printed: execute_luau hands back the chunk's return
+-- value, not its console output.
+local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ parked = model:GetFullName() })
+print(runnerResult)
+return runnerResult

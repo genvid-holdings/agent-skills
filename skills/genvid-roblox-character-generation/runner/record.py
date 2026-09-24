@@ -84,6 +84,11 @@ def run(m, run=subprocess.run, corrections_tool_present=False, allow_unregistere
     def _check(label, media_id, tolerate_failure):
         try:
             return genvid_bind.conformance(m["project_id"], m["asset_id"], media_id, run=run)
+        except genvid_bind.GenvidCliTimeout as e:
+            # A tolerated check that hung is a failed call like the 422 below.
+            if not tolerate_failure:
+                raise
+            return {"skipped": "get-media-conformance failed for %s (media %s): %s" % (label, media_id, e)}
         except subprocess.CalledProcessError as e:
             if not tolerate_failure:
                 raise

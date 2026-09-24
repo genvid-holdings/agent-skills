@@ -33,18 +33,75 @@ def load_rgb(path):
     return load_rgba(path)[:, :, :3]
 
 
-def border_median(rgb):
-    top, bottom = rgb[0, :, :], rgb[-1, :, :]
-    left, right = rgb[:, 0, :], rgb[:, -1, :]
-    border = np.concatenate([top, bottom, left, right], axis=0)
-    return np.median(border, axis=0)
+# Width of the left and right edge strips the background is read from.
+EDGE_STRIP_FRAC = 0.025
+# Height each side's background is smoothed over (a running median down the
+# column). A figure touching one edge, or both, over fewer rows than half this
+# is read through rather than taken for background.
+EDGE_SMOOTH_FRAC = 0.25
+
+
+class BackgroundUnreadable(ValueError):
+    """A plate whose background cannot be read at its side edges."""
+
+
+def _longest_run(flags):
+    """(first, last) index of the longest run of True in `flags`, or None."""
+    best, start = None, None
+    for i, f in enumerate(list(flags) + [False]):
+        if f and start is None:
+            start = i
+        elif not f and start is not None:
+            if best is None or i - 1 - start > best[1] - best[0]:
+                best = (start, i - 1)
+            start = None
+    return best
+
+
+def _running_median(v, window):
+    """Median of each row's `window` neighbours, down the rows of `v` (h, c)."""
+    half = window // 2
+    padded = np.pad(v, ((half, half), (0, 0)), mode="edge")
+    return np.median(np.lib.stride_tricks.sliding_window_view(padded, window, axis=0), axis=-1)
+
+
+def background(rgb):
+    """The plate's background color at every pixel, (h, w, 3). Each side's color
+    is the median of its edge strip per row, smoothed down the column; each row
+    interpolates from its left color to its right one. One median over the whole
+    border misreads a plate painted on a gradient: on one front plate
+    (2026-09-23) it marked 70% of the frame as foreground with a full-frame bbox,
+    and facing.py turned the mesh to a side profile."""
+    h, w = rgb.shape[:2]
+    strip = max(1, int(round(w * EDGE_STRIP_FRAC)))
+    window = max(1, int(round(h * EDGE_SMOOTH_FRAC))) | 1
+    left = _running_median(np.median(rgb[:, :strip, :], axis=1), window)
+    right = _running_median(np.median(rgb[:, -strip:, :], axis=1), window)
+    # A clean background differs side to side by one steady offset (zero unless
+    # it is shaded across). A subject touching one edge over more rows than the
+    # smoothing reads through becomes that side's background, which breaks the
+    # offset over one unbroken run at least that long: refused, not guessed.
+    # Shorter breaks (a tilted floor line, noise) are read through as before.
+    diff = left - right
+    off = np.sqrt(np.sum((diff - np.median(diff, axis=0)) ** 2, axis=-1)) / np.sqrt(3.0)
+    run = _longest_run(off > BORDER_THRESHOLD)
+    if run and run[1] - run[0] + 1 > window // 2:
+        raise BackgroundUnreadable(
+            "the plate's left and right backgrounds disagree over rows %d-%d of %d, an unbroken run longer than "
+            "the %d rows the edge smoothing reads through: either the subject touches a side edge there or the "
+            "background is shaded differently on the two sides; the plate needs a plain background with a "
+            "margin on both sides" % (run[0], run[1], h, window // 2))
+    t = np.linspace(0.0, 1.0, w, dtype=np.float32)[None, :, None]
+    return left[:, None, :] * (1.0 - t) + right[:, None, :] * t
 
 
 def foreground_mask(rgb):
-    """Foreground of a flat-background image: everything far enough from the
-    border-median color. This is what a PLATE needs -- it has no alpha."""
-    med = border_median(rgb)
-    dist = np.sqrt(np.sum((rgb - med) ** 2, axis=-1)) / np.sqrt(3.0)
+    """Foreground of a plain-background image: everything far enough from the
+    background color at that pixel. This is what a PLATE needs -- it has no
+    alpha. On a flat background with the subject clear of both side edges it is
+    the same mask one border median gives; raises BackgroundUnreadable when the
+    subject runs off a side edge (see background())."""
+    dist = np.sqrt(np.sum((rgb - background(rgb)) ** 2, axis=-1)) / np.sqrt(3.0)
     return dist > BORDER_THRESHOLD
 
 

@@ -1,6 +1,7 @@
 """Adopt a rig that is ALREADY parked under the park folder into a
-runner manifest, so the clip chain (`clips transfer` -> `clips build-kfs` ->
-`clips publish-clip` -> `clips bench` -> `clips bind`) runs on it unchanged.
+runner manifest, so the clip chain (`clips transfer` -> `clips build` ->
+`clips build-kfs` -> `clips publish-clip` -> `clips bench` -> `clips bind`) runs
+on it unchanged.
 
 Why: the chain is manifest-driven, and a rig that predates the runner (the
 old-pipeline characters) or arrives as a bare template has
@@ -13,7 +14,7 @@ Those stages are simply not on its chain -- `stage_order` starts at `rest`
 with a fake media_id. `wire` is filled by the `adopt_inspect` Studio step
 (`studio.ingest`) from the parked template itself: its Model:GetScale (what
 `clips build` divides root motion by), hip, sole, bone list and whether it
-carries a HumanoidRootNode (which decides whether `build_kfs` inserts the node
+carries a HumanoidRootNode (which decides whether `clips build` writes the node
 pose). `rest` is the ordinary `dump_rest` step, pointed at the parked template.
 
 Name vs template: `name` is the brand-free stem every published title is built

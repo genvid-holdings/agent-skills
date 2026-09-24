@@ -21,7 +21,11 @@ hum.AutomaticScalingEnabled = false
 hum.HipHeight = hip
 -- Read back off the live instances, never echoed: E23's hip check is a readback
 -- check for exactly this reason.
-print("RUNNER_RESULT " .. HttpService:JSONEncode({ hip = hip, expected_hip = hum.HipHeight,
+-- Returned as well as printed: execute_luau hands back the chunk's return
+-- value, not its console output.
+local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ hip = hip, expected_hip = hum.HipHeight,
 	attribute = model:GetAttribute("{{HIP_ATTR}}"),
 	soleOffsetAttribute = model:GetAttribute("{{SOLE_ATTR}}"),
-	automaticScalingDisabled = not hum.AutomaticScalingEnabled }))
+	automaticScalingDisabled = not hum.AutomaticScalingEnabled })
+print(runnerResult)
+return runnerResult

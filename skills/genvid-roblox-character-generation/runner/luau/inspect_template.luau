@@ -26,4 +26,8 @@ if hrp then out.hrp = { size = { hrp.Size.X, hrp.Size.Y, hrp.Size.Z }, children 
 		table.insert(out.hrp.children, rec)
 	end
 end
-print("RUNNER_RESULT " .. HttpService:JSONEncode(out))
+-- Returned as well as printed: execute_luau hands back the chunk's return
+-- value, not its console output.
+local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode(out)
+print(runnerResult)
+return runnerResult

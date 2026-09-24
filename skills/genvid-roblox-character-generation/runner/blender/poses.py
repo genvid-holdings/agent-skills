@@ -4,7 +4,14 @@ into Roblox Bone.Transform pose data for the KeyframeSequence writer.
 
 Run headless:
   blender --background --python poses.py -- <clip.fbx|glb> <rest.json> <out.json> \\
-      [--rename|--donor|--mixamo|--ual] [--action=NAME] [--rig-height=<studs>]
+      [--rename|--donor|--mixamo|--ual] [--action=NAME] [--rig-height=<studs>] \\
+      [--g=<candidate>] [--no-root] [--root-ref=first|bind] [--trim=START:END]
+
+`--trim=START:END` keeps only the source clip's frames between START and END
+seconds (authored time, from the clip's first frame) and re-bases them so the
+kept range starts at 0: a library clip that repeats its action is cut to one
+action before anything else reads it (root reference, axis scoring,
+trajectories, `clip_seconds`). A range outside the clip is refused.
 
 `rest.json` is the target rig's actual bone rest data dumped from Studio by
 `runner/luau/dump_rest.luau` (per bone: parent, rot 3x3 row-major from
@@ -147,6 +154,11 @@ def main():
     # (a clip that starts mid-air or crouched and should read that way).
     root_ref = next((a.split("=", 1)[1] for a in argv if a.startswith("--root-ref=")), "first")
     assert root_ref in ("first", "bind"), "--root-ref must be first or bind"
+    trim = next((a.split("=", 1)[1] for a in argv if a.startswith("--trim=")), None)
+    if trim is not None:
+        t_start, t_end = (float(v) for v in trim.split(":"))
+        if not 0.0 <= t_start < t_end:
+            raise ValueError(f"--trim={trim}: need 0 <= START < END (seconds of the source clip)")
     action_name = None
     rig_h = RIG_HEIGHT_DEFAULT
     for a in argv:
@@ -238,16 +250,29 @@ def main():
     act = arm.animation_data.action
     f0, f1 = act.frame_range
     fps = bpy.context.scene.render.fps
+    fnums = list(range(int(f0), int(f1 + 0.999) + 1))
+    times = [max(0.0, (f - f0) / fps) for f in fnums]
+    if trim is not None:
+        # half a frame of slack at each end: a boundary typed from a frame
+        # time rounds either way
+        half = 0.5 / fps
+        if t_end > times[-1] + half:
+            raise ValueError(f"--trim={trim} ends past the clip, which is {times[-1]:0.3f}s long")
+        keep = [(f, t) for f, t in zip(fnums, times) if t_start - half <= t <= t_end + half]
+        if len(keep) < 2:
+            raise ValueError(f"--trim={trim} keeps fewer than two frames of a {times[-1]:0.3f}s clip")
+        base = keep[0][1]
+        fnums = [f for f, _t in keep]
+        times = [round(t - base, 6) for _f, t in keep]
+        print(f"trimmed to source frames {fnums[0]}..{fnums[-1]} ({len(fnums)} frames, {times[-1]:0.3f}s)")
     frames = []
-    f = int(f0)
-    while f <= int(f1 + 0.999):
+    for f, t in zip(fnums, times):
         bpy.context.scene.frame_set(f)
         A = {}
         for n in names:
             pm = arm.pose.bones[src[n]].matrix
             A[n] = AW @ np.array(mat9(pm))[:3, :3]
-        frames.append((max(0.0, (f - f0) / fps), A))
-        f += 1
+        frames.append((t, A))
 
     # pick g by foot-trajectory fidelity vs the authored clip
     # authored foot ranges, measured in WORLD frame: X lateral, Y forward
@@ -260,7 +285,7 @@ def main():
     rest_hips_m = AWfull @ arm.data.bones[src["LowerTorso"]].matrix_local
     rest_hips = np.array([rest_hips_m[0][3], rest_hips_m[1][3], rest_hips_m[2][3]])
     for f_, _A in enumerate(frames):
-        bpy.context.scene.frame_set(int(f0) + f_)
+        bpy.context.scene.frame_set(fnums[f_])
         wp = AWfull @ arm.pose.bones[src["LeftFoot"]].matrix
         fl.append(wp[0][3])
         ff.append(wp[1][3])
@@ -437,7 +462,8 @@ def main():
     doc = {"hier": jhier, "frames": jframes, "traj": traj,
            "clip_seconds": frames[-1][0], "source": os.path.basename(clip_path),
            "root_motion": bool(emit_root), "root_ref": root_ref, "g": g_name, "g_forced": forced_g is not None,
-           "root_range_studs": [round(float(v), 3) for v in root_range]}
+           "root_range_studs": [round(float(v), 3) for v in root_range],
+           "trim": [t_start, t_end] if trim is not None else None}
     if emit_root:
         print(f"root motion: max |hips delta| xyz {[round(float(v), 2) for v in root_range]} studs")
     with open(out_path, "w") as fh:

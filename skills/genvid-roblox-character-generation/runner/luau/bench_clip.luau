@@ -93,10 +93,14 @@ local endedPlaying = track.IsPlaying
 local length = track.Length
 m:Destroy()
 local function delta(a, b, i) if a and b then return b[i] - a[i] end return nil end
-print("RUNNER_RESULT " .. HttpService:JSONEncode({
+-- Returned as well as printed: execute_luau hands back the chunk's return
+-- value, not its console output.
+local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({
 	animId = "{{ANIM_ID}}", length = length, speed = speed, soleY = soleY, samples = #samples,
 	hipsDrop = delta(first.hips, last.hips, 2),
 	hipsBack = delta(first.hips, last.hips, 3),
 	headEndAboveSole = last.head and (last.head[2] - soleY) or nil,
 	heldAtEnd = heldAtEnd, endedPlaying = endedPlaying, frozen = frozen, frozeAt = frozeAt, scheduled = scheduled, timeline = samples,
-}))
+})
+print(runnerResult)
+return runnerResult

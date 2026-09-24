@@ -46,6 +46,10 @@ def new(name, project_id, height_studs, vendor, out_dir, contract_name=None, ass
     resolves to whichever agent holds the MCP session, not the reviewer, so
     the asset lands assigned to nobody and never enters in_progress.
 
+    `vendor` is an optional hint (None when not given): the provider the caller
+    expects to use. It is recorded and copied into every request; nothing selects
+    behaviour from it.
+
     `production_title` is the production's own title, and it is written verbatim
     into the description of every governed asset this chain creates
     (plate.bind, biome.bind, biome.kit_bind). It belongs to the production, not

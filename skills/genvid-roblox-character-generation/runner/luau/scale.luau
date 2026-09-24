@@ -40,5 +40,9 @@ local after = worldHeight(model)
 -- pivotHeight is reported alongside so a reviewer can SEE the pivot-frame trap
 -- rather than take it on trust: on a fresh import the two disagree.
 local _, pivotSize = model:GetBoundingBox()
-print("RUNNER_RESULT " .. HttpService:JSONEncode({ heightBefore = before, heightAfter = after,
-	scale = model:GetScale(), pivotHeight = pivotSize.Y }))
+-- Returned as well as printed: execute_luau hands back the chunk's return
+-- value, not its console output.
+local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ heightBefore = before, heightAfter = after,
+	scale = model:GetScale(), pivotHeight = pivotSize.Y })
+print(runnerResult)
+return runnerResult

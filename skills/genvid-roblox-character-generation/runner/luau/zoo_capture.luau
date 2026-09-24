@@ -36,5 +36,9 @@ local dist = ("{{CAMERA}}" == "far") and 260 or 40
 local cam = workspace.CurrentCamera
 cam.CameraType = Enum.CameraType.Scriptable
 cam.CFrame = CFrame.lookAt(center + Vector3.new(dist * 0.6, size.Y * 0.35, dist * 0.8), center)
-print("RUNNER_RESULT " .. HttpService:JSONEncode({ camera_position = { cam.CFrame.Position.X, cam.CFrame.Position.Y, cam.CFrame.Position.Z },
-	look_at = { center.X, center.Y, center.Z }, height = size.Y }))
+-- Returned as well as printed: execute_luau hands back the chunk's return
+-- value, not its console output.
+local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ camera_position = { cam.CFrame.Position.X, cam.CFrame.Position.Y, cam.CFrame.Position.Z },
+	look_at = { center.X, center.Y, center.Z }, height = size.Y })
+print(runnerResult)
+return runnerResult

@@ -1,29 +1,21 @@
 """Per-clip candidate catalog (spec §2.3 fallback order) and local-file lookup
 for the archive clip sources `clips.py` transfers.
 
-Three kinds of source appear in `CATALOG`:
+Three kinds of source:
 
-- `meshy-library`: arrives WITH the rig itself (R6 `rig gen --clips`) as
-  `<out_dir>/clips/<ref>.glb`, on the shipped rig's own Meshy-convention
-  skeleton -- there is no donor rig, so `--donor` mode is simply `--rename` on
-  that file. `locate()` does not resolve this source; `clips.py` reads it
-  straight from the rig stage's output directory (or from `stages.clips.fetched`
-  after an orchestrator-run `clips.fetch()` for an id not in the original rig
-  call). Meshy animation calls themselves are an orchestrator step everywhere
-  in this module and in `clips.py` -- this module never talks to a vendor.
+- `rig-bundled`: a library clip that arrives WITH the rig itself (`rig ingest
+  model --clip <label>=<file>`), on the rig's own skeleton, so it transfers with
+  `--rename`. Its `ref` is the clip's label, and `clips.py` resolves it only
+  through `stages.rig.clip_files[<label>]`; `locate()` does not resolve it. The
+  rig's own record holds its spend.
 - `mixamo-archive` / `quaternius`: resolved locally by `locate()` below.
-- `meshy-text-to-motion` (Slam only): the plan's own fallback order lists a
-  middle rung, "meshy text-to-motion (orchestrator only, <=3 tries)", between
-  the Meshy library clip and the archive fallback. It does not fit this
-  module's typed candidate shape (`ref` is "an action id or filename" for
-  every other candidate; here it would have to be a text prompt, and no
-  `vendors/meshy.py` endpoint or fal model id exists for it). It is kept in
-  `CATALOG` so the fallback chain still documents it, with `mode: None` --
-  `locate()` and `clips.transfer()` both refuse it with an error explaining
-  that the orchestrator must resolve it by hand (submit the Meshy text-to-
-  motion job, download the result, then call `clips.transfer()` again with a
-  `mixamo-archive`-shaped candidate pointing at the downloaded file) rather
-  than silently skipping it or mis-typing it as a resolvable local source.
+- a generated motion: not a `CATALOG` candidate. The caller generates it with a
+  text-to-motion model of its own choosing (`clips emit motion` /
+  `clips ingest motion`), and `clips transfer --source generated` reads its file
+  and skeleton convention from the ingest record. `DESCRIPTIONS` holds the
+  motion each clip asks for.
+
+This module never talks to a provider.
 
 Archive layout under `archive_root` -- the animation archive is the title's own
 tree, named by `ANIM_LIBRARY_ROOT` (required, no default: see `archive_root()`) or a
@@ -91,13 +83,11 @@ def _resolve_archive_root(value):
     `archive_root()` only because `locate`'s own parameter shadows that name."""
     return Path(value).expanduser() if value else archive_root()
 
-# spec §2.3 fallback order per logical clip, Meshy-first where a Meshy library
-# animation id exists. Every clip carries at least one mixamo-archive or
-# quaternius candidate (the free, always-available fallback); see the Slam
-# entry's note above for the one candidate this module cannot drive itself.
+# Fallback order per logical clip. Every clip carries at least one mixamo-archive
+# or quaternius candidate (the free, always-available fallback).
 CATALOG = {
     "Walk": [
-        {"source": "meshy-library", "ref": 112, "mode": "--donor", "loop": True, "priority": "Movement"},
+        {"source": "rig-bundled", "ref": "Walk", "mode": "--rename", "loop": True, "priority": "Movement"},
         {"source": "mixamo-archive", "ref": "mutant walking.fbx", "mode": "--mixamo", "loop": True, "priority": "Movement"},
     ],
     "Idle": [
@@ -106,30 +96,34 @@ CATALOG = {
     ],
     "Stun": [
         {"source": "quaternius", "ref": "Hit_Chest", "mode": "--ual", "loop": False, "priority": "Action"},
-        {"source": "meshy-library", "ref": 171, "mode": "--donor", "loop": False, "priority": "Action"},
+        {"source": "rig-bundled", "ref": "Stun", "mode": "--rename", "loop": False, "priority": "Action"},
     ],
     "Attack": [
-        {"source": "meshy-library", "ref": 26, "mode": "--donor", "loop": False, "priority": "Action"},
+        {"source": "rig-bundled", "ref": "Attack", "mode": "--rename", "loop": False, "priority": "Action"},
         {"source": "mixamo-archive", "ref": "Stomping.fbx", "mode": "--mixamo", "loop": False, "priority": "Action"},
     ],
     "Death": [
-        # The library entry needs the rig's own vendor rig task (the clip arrives
-        # retargeted onto that skeleton). A rig with no task id on record --
-        # an old-pipeline rig, or anything handed over as a bare GLB -- takes
-        # the archive fall below at zero vendor cost; that is what shipped for
-        # two adopted rigs on 2026-09-10 (<Name>Death_v1 apiece).
-        {"source": "meshy-library", "ref": 181, "mode": "--donor", "loop": False, "priority": "Action"},
+        # The bundled entry needs a Death clip delivered with the rig; a rig
+        # without one (an adopted rig, or a bare GLB) takes the archive fallback.
+        {"source": "rig-bundled", "ref": "Death", "mode": "--rename", "loop": False, "priority": "Action"},
         {"source": "mixamo-archive", "ref": "mutant dying.fbx", "mode": "--mixamo", "loop": False, "priority": "Action"},
         {"source": "quaternius", "ref": "Death01", "mode": "--ual", "loop": False, "priority": "Action"},
     ],
     "Slam": [
-        {"source": "meshy-library", "ref": 127, "mode": "--donor", "loop": False, "priority": "Action"},
-        # Orchestrator-only leg; see module docstring. Not locate()-able / transfer()-able.
-        {"source": "meshy-text-to-motion",
-         "ref": "giant character winds up then slams both fists into the ground",
-         "mode": None, "loop": False, "priority": "Action"},
+        {"source": "rig-bundled", "ref": "Slam", "mode": "--rename", "loop": False, "priority": "Action"},
         {"source": "mixamo-archive", "ref": "mutant jump attack.fbx", "mode": "--mixamo", "loop": False, "priority": "Action"},
     ],
+}
+
+# The motion each clip asks a text-to-motion model for (`clips emit motion`'s
+# prompt). Model-type language only: the caller picks the model.
+DESCRIPTIONS = {
+    "Walk": "a looping walk cycle in place: the root stays put while the feet plant and lift in rhythm",
+    "Idle": "a looping idle standing in place: slow breathing and a slight shift of weight",
+    "Stun": "a short hit reaction: the body recoils from a blow to the chest, then recovers its stance",
+    "Attack": "a single heavy stomp: one foot lifts high and drives down into the ground",
+    "Death": "a death: the body staggers, collapses to the ground and stays down",
+    "Slam": "a giant character winds up, then slams both fists into the ground",
 }
 
 
@@ -137,11 +131,10 @@ def locate(candidate, archive_root=None, downloads=DEFAULT_DOWNLOADS):
     """Resolve a `mixamo-archive` or `quaternius` candidate to a file on disk,
     or None when it is not there.
 
-    `meshy-library` is not a local source (`clips.py` reads it from the rig
-    stage's own output directory) and `meshy-text-to-motion` is the
-    orchestrator-only leg documented on `CATALOG["Slam"]` -- both raise here
-    rather than returning None, so a caller that mis-routes one gets a loud
-    error instead of a silent "not found".
+    `rig-bundled` is not a local source (`clips.py` reads it from the rig
+    stage's own output directory), so it raises here rather than returning
+    None: a caller that mis-routes one gets a loud error instead of a silent
+    "not found".
     """
     source = candidate["source"]
     archive_root = _resolve_archive_root(archive_root)
@@ -151,7 +144,7 @@ def locate(candidate, archive_root=None, downloads=DEFAULT_DOWNLOADS):
     if source != "mixamo-archive":
         raise ValueError(
             "locate() only resolves mixamo-archive/quaternius candidates locally, got %r "
-            "(meshy-library arrives with the rig; meshy-text-to-motion is orchestrator-only)" % (source,))
+            "(rig-bundled arrives with the rig)" % (source,))
     ref = candidate["ref"]
     for sub in ARCHIVE_SUBDIRS:
         p = archive_root / sub / ref
