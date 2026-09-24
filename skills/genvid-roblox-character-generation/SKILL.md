@@ -1,6 +1,6 @@
 ---
 name: genvid-roblox-character-generation
-description: Generation recipes for a rigged, textured, in-game-ready Roblox character via the MCP-first path — plate craft that conditions Cube's GenerateModelAsync, the retired Meshy operational record, the Mixamo-to-R15 rig recipe and skinned-rig wiring, world-space animation transfer and asset-naming provenance rules, and the governance calls (register_media/finalize_media_registration, record_approved_corrections) that make the output governed. Illustrated throughout with a real production's giant characters as the worked example. Does not cover Studio/MCP transport or session mechanics — see genvid-roblox-studio-ops.
+description: Generation recipes for a rigged, textured, in-game-ready Roblox character via the MCP-first path — plate craft that conditions Cube's GenerateModelAsync, mesh output checks, the Mixamo-to-R15 rig recipe and skinned-rig wiring, world-space animation transfer and asset-naming provenance rules, and the governance calls (register_media/finalize_media_registration, record_approved_corrections) that make the output governed. Does not cover Studio/MCP transport or session mechanics — see genvid-roblox-studio-ops.
 compatibility: Drives the Genvid boundary (register_media, finalize_media_registration; record_approved_corrections is status:designed, not yet on prod) together with Roblox Studio's generation surfaces (generate_mesh, GenerationService:GenerateModelAsync) reached over Studio's own MCP server per genvid-roblox-studio-ops. See pack.json boundary_compat.
 ---
 
@@ -13,34 +13,16 @@ governed. This is the generation-recipe half of a two-skill pair:
 **`genvid-roblox-studio-ops`** teaches the transport/session mechanics
 (bridge failure modes, `execute_luau` patterns, payload streaming,
 verification limits, crash hygiene, the two generation surfaces' egress
-asymmetry, importer limits, and the Auto-Setup retirement record) — read it
+asymmetry, importer limits, and the Auto-Setup route) — read it
 first if you have not driven a Studio MCP session before. This skill does
 not repeat any of that; it teaches the craft on top of it.
 
-**Worked example:** every recipe below is illustrated with one production's
-four elemental giant characters. That production is undisclosed, so its
-characters appear here only under neutral stand-ins — a size word (`Small`,
-`Large`), a height in studs, an element — never under its own type keys, and
-`<Name>` marks a slot its naming would fill. Those four are **the example
-customization**,
-not the subject of this skill:
-the recipe is a general Roblox character-generation pipeline, and code/asset
-names below drawn from that build (`animSpeedScale`, `HipHeightStuds`
-on a character template, its own spawn function, and so on) are simply that
-production's naming, carried
-through because the underlying technique they illustrate is what this skill
-teaches. Where a step below is witnessed only in that build and has not
-been generalized beyond it, the text says so explicitly rather than implying
-it holds for every character.
-
-Knowledge below was copied out of a retired fal-chain pipeline repo (built
-originally for a different, human-scale character) and
-out of the worked example's own build. Citations carry `path@retired-2026-08`
-— that repo is read-only source material, not something this pack depends on
-at runtime. It is that production's own repo, so it is not named here. Items marked **[mining]** were recovered from working-session
-transcripts, not re-witnessed in a file; treat them as reliable operational
-lore, not verified fact, and do not upgrade the label if you re-encounter the
-claim elsewhere.
+**Placeholders.** Examples below use neutral stand-ins for a character — a
+size word (`Small`, `Large`), a height in studs, an element — and `<Name>` for
+a slot a production's own naming fills. Code and attribute names in the
+examples (`animSpeedScale`, `HipHeightStuds` on a character template, a
+title's own spawn function) are one production's naming; the technique they
+illustrate is what this skill teaches.
 
 ---
 
@@ -86,9 +68,8 @@ published clip — is exactly as capable of writing to an unclaimed asset, and
 of hitting the boundary's 409 on one the reviewer already approved, as the first
 bind was. Check the claim before that write too: list the asset's
 assignments, claim the assetImage task if none exists, and reopen it to
-`in_progress` if it is `approved` (witnessed 2026-09-07: the boundary answers
-409 to a bind on an approved task) — reopen `in_review` the same way
-on the same reasoning, though its 409 is not itself separately witnessed. The
+`in_progress` if it is `approved` or `in_review` (the boundary answers 409 to a
+bind on an approved task). The
 runner's own `genvid_bind.ensure_claim` is this check for every site that
 binds to an asset it did not just create (`plate bind --only front/all` on an
 existing asset, `plate bind --only views`, `mesh.bind`, `rig.bind`,
@@ -135,11 +116,9 @@ CDN. Before any MCP fallback, check the asset's media for the row; when
 the processed file is not hosted on that CDN, the CLI multipart bind is the
 only path. Do not fall back to the provider's original result URL.
 
-> **[mining]** Standing direction on the worked example's production
-> (2026-08-25): generated assets are tracked in Genvid, never only locally, and
-> review happens in the Genvid interface rather than on files handed over in a
-> terminal. Recorded here because it generalizes — any production driving this
-> skill wants the approval gate inside the governance boundary, not beside it.
+**Track generated assets in Genvid, never only locally.** Review happens in
+the Genvid interface, not on files handed over in a terminal, so the approval
+gate sits inside the governance boundary, not beside it.
 
 **You may reject previously-selected media under a conversation decision — you
 may never approve, and never delete.** Approval is a human act: a task's
@@ -157,8 +136,7 @@ your own judgment — selecting is still exclusively a human act. If the
 covering task is already `approved`, the boundary refuses the selection
 change until the task is reopened to `in_progress` first — the same
 claim-or-reopen `set_assignment_status` step this section already describes
-for an unclaimed bind (attested from the platform's own approval-guard
-behavior, not separately witnessed).
+for an unclaimed bind.
 
 Pair every discard with a `record_decision` call so the supersession has a
 durable record independent of chat history — never discard silently. The
@@ -169,17 +147,16 @@ verdict — recording that this media lost out, not that the agent approved
 anything. A `reject` verdict additionally requires at least one
 `critique_tags` entry naming an *active* `critique_taxonomy_class.code`; an
 invented or free-text tag (e.g. `"composition"`) is refused with an unknown
-taxonomy code error — this already happened on this production (a biome
-prop's glow-puddle discard, 2026-09-08). There is no MCP-facing list call for the
-taxonomy today; pick the `critique_taxonomy_class.code` whose seeded v1
+taxonomy code error. There is no MCP-facing list call for the
+taxonomy; pick the `critique_taxonomy_class.code` whose seeded v1
 description actually matches the owner's stated reason —
 `prompt_adherence`, `subject_set_violation`, `character_canon_consistency`,
 `rendering_style_drift`, `composition_framing_scale`, `motion_physics`,
 `temporal_continuity`, `hallucinated_objects_anatomy`,
 `burned_in_text_artifacts`, `audio_voice_fit`, `lipsync_face`,
-`pacing_duration` (attested from the boundary's seed vocabulary, 2026-09-08;
-the vocabulary is versioned and additions are possible, so treat this as the
-current list, not a closed guarantee). If none of these actually describes
+`pacing_duration` (the boundary's seed vocabulary; it is versioned and
+additions are possible, so treat this as the current list, not a closed
+guarantee). If none of these actually describes
 the reason, do not coin or force-fit a tag: there is no valid `reject` call
 without one, so the discard itself waits — hold the media `selected` (or
 `pending`), give the owner the precise reason and ask them to name a tag or
@@ -210,39 +187,30 @@ references.** When an asset belongs to a biome (a kit item, a prop, any
 set-dressing/greenery asset), put that biome's palette hex list in the
 asset's own description — not only in the one-off generation prompt — so a
 later re-roll built from the asset (rather than from the original prompt) is
-still conditioned on the right palette. Missing this is exactly what
-happened on 30 prop assets across two biomes (caught and fixed 2026-09-08);
-treat the hex list as a required field of the description, not decoration.
+still conditioned on the right palette. Treat the hex list as a required
+field of the description, not decoration.
 
 ---
 
-## 1. Plate craft (LIVE — plates condition `GenerateModelAsync`)
+## 1. Plate craft (plates condition `GenerateModelAsync`)
 
-This stage is not retired: Studio's `GenerationService:GenerateModelAsync` is
-image-conditioned (see `genvid-roblox-studio-ops` for the surface comparison),
-so the plate you feed it still drives the result the way it always did.
+Studio's `GenerationService:GenerateModelAsync` is image-conditioned (see
+`genvid-roblox-studio-ops` for the surface comparison), so the plate you feed
+it drives the result.
 
 - **Always inspect and re-roll the plate before spending on 3D.** A-pose with
   clear limb gaps.
-- **[mining]** **The element-body trick** — build the creature *out of* its
-  element (ice, lightning, stone, ...) while keeping the two-arm/two-leg body
-  plan intact. In the worked example, this is the move that carried a giant-
-  character concept through its approval gate.
-- **[mining]** **Variant-editing from an approved plate** is the cheap way to
+- **Variant-editing from an approved plate** is the cheap way to
   fork A/B options — edit the already-approved plate rather than generating a
   fresh one from scratch, so approval risk on the base concept is spent once.
 
-**Worked example, carried verbatim** (`PLAYBOOK.md:57-79@retired-2026-08`) —
-this particular prompt predates the worked example's production and was written for a
-different, non-elemental character, but the pose/gap discipline it encodes is
-exactly what the element-body trick above depends on, and a pack consumer
-cannot retrieve the read-only source, so the prompt itself is reproduced
-rather than described:
+**Example cleanup prompt.** It is written for a human character; the
+pose/gap discipline it encodes is what to carry to any character.
 
-**Goal:** strip everything Auto-Setup rejects while keeping identity, and
-normalize the pose. **Model:** `fal-ai/nano-banana-2/edit` (Gemini 3.1 Flash
-Image / "Nano Banana 2"). Start from a full-body, front-facing image on a
-plain background.
+**Goal:** strip detachable gear and clutter while keeping identity, and
+normalize the pose. **Model type:** an image-edit (image-to-image) model of
+your choosing. Start from a full-body, front-facing image on a plain
+background.
 
 > Edit this character into a clean, scan-ready base body for 3D reconstruction. Keep the
 > same woman — face, skin tone, tattoos, body proportions, and outfit colors. Remove ALL
@@ -258,92 +226,59 @@ plain background.
 > touching. Full body head-to-feet, centered, plain flat neutral gray background, even
 > studio lighting, no floor shadow.
 
-Params: `resolution: "2K"`, `aspect_ratio: "3:4"`, `thinking_level: "high"`.
-For an elemental character like the worked example's four, adapt the
-"remove detachable gear" clause to the element-body trick above — the intent
-(a clean, symmetric A-pose with clear limb gaps and no clutter) is what to
-carry forward for any character concept, not this prompt's specific wardrobe.
+Ask for about 2K resolution at a 3:4 portrait aspect, in whatever parameters
+your model takes. The intent (a clean, symmetric A-pose with clear limb gaps
+and no clutter) is what to carry forward for any character concept, not this
+prompt's specific wardrobe.
 
 ---
 
-## 2. Retired-path operational record (Meshy) — HISTORICAL
+## 2. Mesh output checks
 
-Meshy (`fal-ai/meshy/v6/image-to-3d`) was the image-to-3D backend before the
-Cube/MCP pivot. It is not the live path — Cube's `GenerateModelAsync` is —
-but the operational facts below are worth keeping because the skinned-rig
-recipe in §3–4 was built and proven against Meshy output on the worked
-example's characters, and anyone still holding a Meshy-rigged GLB for any character
-needs them.
-
-**The eight params that worked** (`PLAYBOOK.md:111-115@retired-2026-08`),
-carrying the block's own framing (`PLAYBOOK.md:109-110`): **rigging was
-deliberately OFF** — the intent was the raw body so *Roblox* builds the R15
-rig, not Meshy's non-R15 skeleton. Read this framing before the block below,
-or it misreads as the rigged-export parameter set, which inverts its intent.
-
-```json
-{ "image_url": "<cleaned plate>", "pose_mode": "a-pose",
-  "symmetry_mode": "auto", "should_texture": true, "enable_pbr": true,
-  "enable_rigging": false, "target_polycount": 30000, "topology": "triangle" }
-```
-
-Other operational facts, gathered while building the worked example's characters:
-
-- **[mining]** The **rigged-export polygon cap is exactly 20,000** triangles.
-- **[mining]** Rigging jobs run **silent for 10–20 minutes** — a long
-  unresponsive job is expected behavior, not a hang.
-- **[mining]** `enable_rigging: true` **destroys non-humanoid silhouettes.**
-  In the worked example, a cloud-float, lightning-bodied character needed the *unrigged*
-  path plus a hand-built armature — rigging a body that isn't roughly
-  humanoid-shaped wrecks it.
-- Meshy wires the **same atlas into Base Color AND Emission**
-  (`stage_f_rig.py:88-92`) — leaving that link intact makes the body render
-  self-lit; strip the Emission link/strength explicitly.
 - **The texture must ride the FBX.** Nothing at runtime re-textures a skinned
-  `MeshPart` — the Roblox importer packages the texture into the mesh asset
-  itself, and `SurfaceAppearance`/`TextureID` overrides never take
-  (`stage_f_rig.py:12-18`).
+  `MeshPart`: the Roblox importer packages the texture into the mesh asset
+  itself, and `SurfaceAppearance`/`TextureID` overrides never take.
+- **Strip an Emission link that reuses the base-color atlas.** A rigged file
+  that wires the same atlas into Base Color and Emission renders the body
+  self-lit; remove the Emission link and strength explicitly.
 
 ---
 
 ## 3. The rig recipe
 
-Converting a Meshy-rigged, Mixamo-convention skeleton into an R15-compatible
-skinned FBX for Studio's 3D Importer (`stage_f_rig.py@retired-2026-08`) —
-this conversion is character-agnostic; the worked example ran it on all four
-of its characters:
+Converting a Mixamo-convention skeleton, as an auto-rigger emits it, into an
+R15-compatible skinned FBX for Studio's 3D Importer. The conversion is
+character-agnostic:
 
-- **Mixamo→R15 rename table + leaf-up bone fold** (`stage_f_rig.py:25-53`):
-  the 15 keeper bones get renamed to their R15 names directly; the 9 extra
-  bones get their skin weights folded into an R15 neighbor, merged **leaf-up**
+- **Mixamo→R15 rename table + leaf-up bone fold**: the 15 keeper bones get
+  renamed to their R15 names directly; the 9 extra bones get their skin weights folded into an R15 neighbor, merged **leaf-up**
   (children reparent to the removed bone's parent first) so chains reparent
   cleanly.
-- **Armature-origin-at-root-bone + mesh-vertex-shift**
-  (`stage_f_rig.py:178-213`): the root bone must sit at the torso, not at the
-  world origin — the importer maps it to `HumanoidRootPart` and hangs every
+- **Armature-origin-at-root-bone + mesh-vertex-shift**: the root bone must
+  sit at the torso, not at the world origin — the importer maps it to `HumanoidRootPart` and hangs every
   child bone's rest offset off it, so an origin-rooted skeleton floats the
   whole visual mesh a full body-height above the ground. Relocate the
   armature origin to the root bone, then shift the raw mesh vertex data by
   the same offset (Roblox's far-LOD draws the raw mesh anchored at the root
   bone node, so unshifted vertex data floats the far-distance visual by the
   hip height even though the skinned close-range render is unaffected).
-- **`HumanoidRootNode` naming** — keep the note at the definition
-  (`stage_f_rig.py:182`): naming it `Root` instead fails the R15 guideline
-  check; `HumanoidRootNode` is the name the Roblox avatar template expects.
-- **World-space rotation-delta transfer** (`stage_h_poses.py:21-27`): do not
+- **`HumanoidRootNode` naming** — naming it `Root` instead fails the R15
+  guideline check; `HumanoidRootNode` is the name the Roblox avatar template
+  expects.
+- **World-space rotation-delta transfer**: do not
   play a clip's local rotations as `Bone.Transform` — Roblox re-orients bone
   local frames per bone at FBX import, so source-local rotations land on the
   wrong axes (knee flexion becomes knee twist, the "marionette" walk).
   Transfer **world-space rotation deltas** instead, with the global axis
-  conversion chosen **EMPIRICALLY** (`stage_h_poses.py:28-30`): the candidate
+  conversion chosen **EMPIRICALLY**: the candidate
   whose predicted foot trajectory best matches the authored clip (lateral vs.
   forward swing, height range) wins. There is no closed-form derivation for
   this — it is a search over candidates, not an analytic pick. **The pick is
   only trustworthy on a walk.** The score compares foot trajectories against a
-  walk-shaped truth, and on the leg B rig it chose the wrong frame for every
-  non-walk clip (a fall and a stomp both landed on a map with up pointing
-  forward, witnessed 2026-09-08) while the walk and idle on the same skeleton
-  agreed. The map is a property of the source skeleton, not of the clip:
+  walk-shaped truth, and on a non-walk clip (a fall, a stomp) it can choose a
+  wrong frame, such as a map with up pointing forward, while the walk and idle
+  on the same skeleton agree. The map is a property of the source skeleton,
+  not of the clip:
   transfer the walk first, read its pick from the poses doc (`g`), and pass
   `--g=<that name>` for every other clip on that skeleton (`poses.py` records
   `g` and `g_forced` on every doc so a review can tell which it was). The
@@ -351,73 +286,44 @@ of its characters:
   doc's `g` and forces it (`--g <name>` forces one by name), and the clip item
   records `g`, `g_forced` and `g_from`.
 
-**The transfer law:** in the worked example, ALL of the production's clips were
-transferred onto the Meshy-skeleton rigs by `stage_h_poses.py`'s world-space
-transfer (`docs/animation-provenance.md@retired-2026-08`); the native-Meshy
-walks that predate this are recorded there as **SUPERSEDED**, not
-as a live alternative. `stage_h_anim.py:1-19@retired-2026-08` is cited here
-**only** for one fact — the standard R15 walk track retargets badly (hip keys
-land at 90+ degrees, legs fold to head height) onto Meshy's Mixamo-convention
-skeletons — and that fact is labeled as the **retired native-clip route**.
-Its own recipe (Meshy's own walking clip needs no retargeting because it was
-authored on that exact skeleton) is the **superseded path**, not the current
-law; do not read `stage_h_anim.py` as describing how production animation
-transfer works today, for the worked example's characters or any other.
-
-- **[mining]** **Treadmill method for `animSpeedScale`**: offline estimates
-  of the right speed-scale value are untrustworthy — measure it in-engine,
-  live, rather than computing it from clip metadata. (`animSpeedScale` is
-  the worked example's dial name.)
+**The transfer law:** transfer every clip by world-space rotation delta.
+Do not play the standard R15 walk track on a Mixamo-convention skeleton: it
+retargets badly (hip keys land at 90+ degrees, legs fold to head height).
 
 ---
 
 ## 4. The skinned-rig wiring recipe, full form
 
 Wiring a rigged, R15-skinned import into a working in-game rig (importer
-physics are not usable as-is), applicable to any character on this pipeline.
-The base recipe order and the config values below are `docs/HANDOFF.md`'s
-T13 recipe (steps 2, 3, 5, 7 in full, plus the base clauses of steps 4 and 6,
-at `docs/HANDOFF.md:210-214@retired-2026-08` — T13 was the worked example's
-own character-visual-identity task, hence the name). Steps 1 and 8, and each
-clause below marked individually, come from working-session transcripts
-rather than a committed file; the full recipe was then re-witnessed end to
-end, which is what the **[mining, full recipe re-witnessed]** tag records:
+physics are not usable as-is), applicable to any character on this pipeline:
 
-1. **[mining, full recipe re-witnessed]** **Strip the
-   importer's avatar-scaling metadata, then REBUILD it.** The importer's own
-   scaling metadata silently reverts hand-done `HumanoidRootPart` surgery if
-   left in place, so it has to be stripped and then explicitly rebuilt: the 6
+1. **Strip the importer's avatar-scaling metadata, then REBUILD it.** The
+   importer's own scaling metadata silently reverts hand-done
+   `HumanoidRootPart` surgery if left in place, so it has to be stripped and then explicitly rebuilt: the 6
    `Humanoid` NumberValues, per-`Bone` `OriginalPosition`, and
    `AvatarPartScaleType = "Classic"`.
 2. Rebuild `HumanoidRootPart` as a torso box at the `LowerTorso` bone.
 3. `WeldConstraint` the mesh to it (`CanCollide = false`, `Massless = true`).
 4. Upright `AlignOrientation` (`OneAttachment`, `PrimaryAxisOnly`, axis `Y`,
-   rigid). **[mining, full recipe re-witnessed]**
-   `AlignOrientation`'s `PrimaryAxis` **defaults to `X`** — leaving the
+   rigid). `AlignOrientation`'s `PrimaryAxis` **defaults to `X`** — leaving the
    default silently floats the rig horizontal instead of upright; it must be
    set to `Y` explicitly.
 5. `RequiresNeck = false`, fall states off.
 6. `AutomaticScalingEnabled = false`, **then** pin `HipHeight` — Play-start
    recomputes `HipHeight` to garbage if scaling is still enabled when it's
-   set. **[mining, full recipe re-witnessed]** The
-   `HipHeight` formula is `hip = (rootY − feetPlane) − rootSize.Y / 2`; a
-   fixed `12.5` figure recorded from an early session on one character
-   (`archive/2026-08-retirement/sdd-ledger/progress.md:145@retired-2026-08`)
-   is **not canonical for any character** — it changed on every import and
-   was specific to that run's geometry. Use the formula, not the number.
+   set. The `HipHeight` formula is
+   `hip = (rootY − feetPlane) − rootSize.Y / 2`. No fixed hip figure is
+   canonical for any character: it changes with every import's geometry.
+   Use the formula, not a number from another import.
 7. Release the rig via `ChangeState(GettingUp)`.
-8. **[mining, full recipe re-witnessed]** **Spawn placement
-   reads the `HipHeightStuds` attribute**, not the part bounding box — part
-   bboxes lie on these rigs, so your character-spawn code must read the
-   attribute, not `GetBoundingBox` (in the worked example, this is that
-   production's own spawn function).
+8. **Spawn placement reads the `HipHeightStuds` attribute**, not the part
+   bounding box — part bboxes lie on these rigs, so your character-spawn code must read the
+   attribute, not `GetBoundingBox`.
 
-**Two-point scale calibration is cross-referenced only, not repeated here.**
-It shipped in `genvid-roblox-studio-ops/SKILL.md:126` as part of that
-skill's Auto-Setup retirement record (per plan §5.1/§6); copying it into this
-skill would duplicate content across the pair. Use it as written there.
+**Two-point scale calibration lives in `genvid-roblox-studio-ops`**, not
+here; use it as written there.
 
-- **[mining, spot-checked]** **Roblox render law:** skinned meshes render two
+- **Roblox render law:** skinned meshes render two
   different ways depending on distance — close-range is bone-deformed
   (skinning active), far-range (LOD) draws the raw mesh file anchored at the
   root bone, ignoring part position entirely. Verify posture/placement work
@@ -547,8 +453,7 @@ encodings — check which tool you're calling before formatting the value.
 
 **Not yet on prod:** `record_approved_corrections` is published in
 `boundary-tools.md` at `status: designed` — documented and described in this
-pack's reference material, but not yet deployed to production as of this
-pack bump.
+pack's reference material, but not yet deployed to production.
 
 ### 5.3 Staleness read paths, cheapest first
 
@@ -570,27 +475,22 @@ current media, in order of what they cost to call:
    (`context/api/cli-usage.md`), a separate credential from the MCP session —
    an agent cannot extract and reuse its MCP session's server-side bearer
    token for this; the CLI does its own login. This is the same CLI-only
-   routing this pack already uses elsewhere for reads MCP doesn't (yet)
-   surface — `assets_read` MCP wiring for this staleness read is deferred.
+   routing this pack uses elsewhere for reads MCP does not surface;
+   `assets_read` does not serve this staleness read.
 
 ### 5.4 Provenance rules for animation asset naming
 
-From `docs/animation-provenance.md@retired-2026-08` (rules recorded against
-the worked example's animation set):
-
-- **Never put a source brand name in a Roblox asset's title.** A submission
-  was rejected over exactly this. The rejection was over the brand name
-  appearing **in the asset title**, not over the motion itself — the source
-  clip's license permits using the animations in games. Scrub names to a
-  convention like `SmallWalk_v1`, not `MixamoWalk_v1`.
+- **Never put a source brand name in a Roblox asset's title.** A brand name
+  in the asset title gets a submission rejected; the motion itself is
+  licensed for games. Scrub names to a convention like `SmallWalk_v1`, not `MixamoWalk_v1`.
 - **Approved sources:** CMU Motion Capture Database (free for any use,
   including commercial), Quaternius (CC0).
   **Forbidden sources:** Ubisoft LaFAN1 and Bandai Namco motion datasets
   (non-commercial licenses); Roblox catalog animations are also out —
   **except** onto a true R15 rig, where catalog anims do retarget cleanly
-  (they only fail to retarget cleanly onto the Meshy-convention skeletons
+  (they fail to retarget cleanly onto the Mixamo-convention skeletons
   this pipeline otherwise uses).
-- **The Mixamo download rule**, with its actionable half: **select the stock
+- **The Mixamo download rule**: **select the stock
   X Bot character FIRST**, under Mixamo's Characters tab, before downloading
   a clip. Character selection is the whole mechanism here — downloading a
   clip while an uploaded custom rig is the current character silently drops
@@ -606,7 +506,6 @@ the worked example's animation set):
 | What you want | Where |
 |---|---|
 | Studio MCP transport, session mechanics, moderation-retry discipline, two-point scale calibration | `genvid-roblox-studio-ops` |
-| Posture-tuning method (pelvis rule, sign convention, per-foot dials, the zoo tuning toolkit — recorded against the worked example's build) | `docs/posture-tuning-method.md@retired-2026-08` |
 | Tier reconciliation — why platform-tier captures (this skill) don't go through `genvid-media-registration`'s archival flow | `genvid-media-registration` (scoped note there); platform tier has no ingest path — no party holds bytes to hash, so there is nothing to register through that skill's flow |
 | Conformance checking a captured artifact | `check_conformance` — correctly refuses on platform-custodied media: it measures the artifact's bytes, and a platform-custodied asset has none for it to read |
 
@@ -616,8 +515,8 @@ the worked example's animation set):
 
 `runner/cli.py`, under `skills/genvid-roblox-character-generation/runner/`, is a
 stdlib-only Python package invoked as `python3 runner/cli.py <group> <cmd> ...`.
-Each group — `init`, `plate`, `mesh`, `rig`, `studio`, `clips`, `eval`,
-`record`, `biome` — is its own module exposing `register(subparsers)`; `cli.py` imports
+Each group — `init`, `plate`, `mesh`, `rig`, `surface`, `studio`, `clips`,
+`eval`, `record`, `biome` — is its own module exposing `register(subparsers)`; `cli.py` imports
 each lazily and skips one that fails to import rather than breaking the rest.
 
 **Nothing bound to one title lives here.** A title's own chains, its Studio
@@ -682,11 +581,26 @@ title, so `clips.anims_dir()` and `clipsources.archive_root()` raise naming the
 variable instead of guessing a checkout. A wrong guess is worse than a refusal in
 both cases: a `.rbxmx` written where nothing syncs never reaches Studio, and an
 archive root that misses reads exactly like a clip with no archive fallback, which
-pushes a caller onto a paid vendor leg it did not need. A per-title skill exports
+pushes a caller onto a paid generation it did not need. A per-title skill exports
 both from its own config.
 
-**Stage order.** A skinned-rig character runs `plate -> mesh -> rig -> rest ->
-groundfit -> clips -> wire -> record`. A static model with no Humanoid and no rig
+**Stage order.** A skinned-rig character's manifest records its stages as
+`plate -> mesh -> rig -> rest -> groundfit -> clips -> wire -> record`, the
+order `record run` checks them in. The Studio work runs in a different order,
+set by which template each step reads. `scale`, `dump_rest`, `groundfit`,
+`wire` and `capture_ids` find the imported template in `workspace`; `park`
+moves it into the park folder; every later step (`settle`, `sethip`,
+`probe_feet`, `probe_walk`, `treadmill`, `bench_clip`, and the clip route's
+`build_kfs` and `publish_clip`) reads it from the park folder. The workspace
+steps take the template through the `MODEL_PATH` render parameter (default
+`workspace:FindFirstChild("<template>", true)`), so `capture_ids` can also run
+after `park` with `--param MODEL_PATH=<park folder expression>["<template>"]`.
+So `wire` and `park` (and `capture_ids`, by default) run right after the
+`groundfit` measurement, before
+the settle loop and before any clip is built: `clips build` also takes the
+root scale from `stages.wire.result.scale`, and `studio ingest build_kfs`
+refuses a template that is not under the park folder. The end-to-end list at
+the end of this section gives the full order. A static model with no Humanoid and no rig
 skips straight to `plate -> mesh -> wire -> record`: there is no rig, ground-fit,
 or clip stage for something that never gets a skeleton. A biome/location plate or
 the HUD viz-dev asset carries its own shorter stage order on the manifest itself.
@@ -696,47 +610,143 @@ re-runs only the scale-dependent tail (`scale`, `dump_rest`, `groundfit`, `wire`
 across so the original manifest is never touched; that chain and the static
 model's two title-specific steps live in a per-title skill, not here.
 
+**Generation: emit, run a model, ingest.** The runner never calls a model and
+never names one. Every generating step is a pair with the model run between
+them, by the agent, with whatever model and provider it chooses:
+
+    runner <group> emit <step> --manifest M [--item K] --estimate <USD> [--model <text>] [--no-urls]
+    # the agent runs a model of the requested TYPE on the request's inputs
+    runner <group> ingest <step> --manifest M [--item K] --provider <text> --model <text> \
+        [--params <JSON object>] (--cost <amount> [--currency <ISO 4217>] | --cost-unobserved) \
+        [--prompt <text>] [--render-type ...] [--input-media-id <id> ...] \
+        [--record-only] [--supersede] [--unrequested <reason>] <file-or-url>
+
+`emit` gates the estimate against the Genvid budget (below) and writes
+`<out>/requests/<stage>-<step>[-<item>].json`, a request that names the model
+TYPE, the render type, the prompt and the input media (with signed download
+URLs unless `--no-urls`). `--model` on emit is optional and never checked; it is
+recorded with the budget verdict so that naming a different model gates again.
+`ingest` takes the result as a local file or an http(s) URL, records the
+provider, model, params and cost the agent reports, and binds it. The pairs:
+
+| Stage | Emit | Ingest | Model type |
+|---|---|---|---|
+| plate | `plate emit front --prompt ... [--input-media-id <ref>]`, `plate emit views [--item back\|left\|right]` | `plate ingest front --item c1 [--asset-id ... \| --create-asset] <result>`, `plate ingest views --item <view> <result>` | text-to-image, or image-to-image with a reference |
+| mesh | `mesh emit model` | `mesh ingest model <result>` (GLB preferred; binary FBX or OBJ converted), which also preps and binds | image-to-3D |
+| rig | `rig emit model [--clip LABEL:DESCRIPTION ...]` | `rig ingest model --rig <result> [--clip LABEL=FILE ...] [--derived-from mesh\|plate]`, which also converts to R15 and binds | rigging |
+| clips | `clips emit motion --clip <key> ...` | `clips ingest motion --clip <key> --mode mixamo\|r15\|rename\|ual <result>` | text-to-motion |
+| biome plate | `biome emit plates` | `biome ingest plates --item 1\|2\|3 [--asset-id ... \| --create-asset] <result>` | text-to-image |
+| HUD plate | `biome emit hud-plates` | `biome ingest hud-plates --item pill\|chunky\|minimal [--asset-id ... \| --create-asset] <result>` | text-to-image |
+| sky | `biome emit sky` | `biome ingest sky <result>`, which splits the six cube faces and binds all seven | image-to-panorama |
+| kit sheet | `biome emit kit-sheet [--props ...] [--rows ...] [--cols ...]` | `biome ingest kit-sheet <result>`, which splits the tiles, binds them and creates one asset per prop | image-to-image, the approved plate as style reference |
+| kit model | `biome emit kit-model --prop <key> [--triangles-max ...]` | `biome ingest kit-model --prop <key> <result>`, or `--roblox-asset-id <id> [--mesh-id ...] [--texture-id ...]` for a model that exists only in Roblox | image-to-3D |
+
+`rig emit model --clip` asks the rigging model for library motions bundled with
+the rig, one per label; `rig ingest model --clip LABEL=FILE` records each as
+`<out>/clips/<label>.glb` and binds it as its own motion row citing the rig.
+`clips ingest motion --mode` names the skeleton convention the clip is authored
+on: `rename` (the rig's own bone names), `mixamo`, `ual` (Rigify `DEF-` names)
+or `r15`. `plate select-front --media-id <id>` records which bound candidate is
+the front plate. `mesh prep` / `mesh bind`, `rig r15` / `rig bind` and `plate
+bind` re-run the processing or the bind on what was already recorded (after a
+`ClaimPending`, or an ingest run with `--record-only`); `--supersede` binds
+different bytes for an item already bound, as a new row that supersedes it.
+One ingest has no emit: `rig ingest surface-texture` records and binds a
+texture generated for the surface pass, and always takes `--unrequested
+<reason>`. `surface prep` then re-bakes the existing character's rig with that
+texture and binds it, and the `applymesh` Studio step swaps the re-baked mesh
+onto the already-parked template.
+
 **Studio steps.** Studio-side work is Luau templates under `runner/luau/` the
 driving agent renders with `runner studio emit <step>`, executes over the
 Studio MCP, and feeds back with `runner studio ingest <step>`. Ground-fit is
 five steps, not the three the interface contract's single formula suggests,
 because a standing Humanoid hovers above its own `HipHeight` by a per-rig
-constant, and the loop's exit test has to be a measurement, not an assumption:
+constant, and the loop's exit test has to be a measurement, not an assumption.
+The first step reads the imported template in `workspace` and the rest read it
+from the park folder, so `wire` and `park` run between them (Stage order,
+above):
 
     studio emit groundfit ...; ingest groundfit ...    # EDIT: measures SoleOffsetStuds
+    studio emit wire ...     ; ingest wire ...         # EDIT: wires the rig (§4)
+    studio emit park ...     ; ingest park ...         # EDIT: moves the template into the park folder
     studio emit settle ...   ; ingest settle ...       # PLAY: measures the hover constant
     studio emit sethip ...   ; ingest sethip ...       # EDIT: writes the corrected HipHeight
     studio emit settle ...   ; ingest settle ...       # PLAY: verifies the fix
-    studio emit probe_feet ...; ingest probe_feet --lod close|far ...
+    studio emit probe_feet ...; ingest probe_feet --lod close ...                      # EDIT: close LOD
+    studio emit probe_feet --param LOD=far ...; ingest probe_feet --lod far ...        # EDIT: far LOD
 
 Two hip numbers come out of this loop for two different consumers.
 `SoleOffsetStuds` is the raw geometric distance from the HumanoidRootPart's
 bottom to the rest pose's lowest vertex — `(rootY - feetPlane) - rootSize.Y/2`
-— and is what an anchored, non-Humanoid placement (ZooGen) reads. `HipHeightStuds`
+— and is what an anchored, non-Humanoid placement reads. `HipHeightStuds`
 is what `Humanoid.HipHeight` needs so a *live* rig's soles actually touch the
 ground: `SoleOffsetStuds` minus the hover constant. Using one where the other
-is wanted floats or sinks the rig by exactly that constant. The bake-off's
-second settle measured the constant at 0.45 / 0.89 / 1.03 studs on its three
-legs and the corrected loop converged all three to within +-0.006 studs,
-standing and mid-walk (witnessed 2026-09-04).
+is wanted floats or sinks the rig by exactly that constant.
 
-`build_kfs` and `publish_clip` are the two Studio steps that close the clips
-stage with no Save-to-Roblox click. The KeyframeSequence itself is built on the
-host: `clips build --anims-dir <dir>` writes `<Name><Clip>_v<N>.rbxmx` into the
-directory the title's Rojo project maps to `ServerStorage.Assets.Anims`, and
-records what the synced sequence must contain (`kfs_expected`: keyframe count,
-last keyframe time, time scale, loop, priority, root-node shape, root scale). `build_kfs` is
-a read-only Studio step that reads the synced sequence and the template back;
-`studio ingest build_kfs --clip <Clip>` compares the two and refuses a sequence
-that is missing or differs, naming the `clips build` + Rojo sync to re-run.
-`clips publish-clip` publishes the title `clips build` recorded, and only after
-that ingest has verified the same title. `studio emit publish_clip` is gated
-the same way, and refuses a CLIP that is not on `stages.clips.items` at all,
-with no bypass. A title's own clips are declared keys (below), so each one is
-a manifest item that is transferred, built, verified and published like any
-other clip; a re-run of `clips build` drops the
-earlier verification, so a rewritten file is verified again before it is
-published.
+**The clip route.** One clip, from source motion to a governed, published
+Roblox animation, with no Save-to-Roblox click on the path. It runs once the
+template is wired and parked (Stage order, above):
+
+    runner clips declare --manifest M --clip <key> --loop true|false --priority Idle|Movement|Action [--description <motion>]   # a title's own key only
+    runner clips emit motion --manifest M --clip <key> --estimate <USD>       # a generated clip only; run a text-to-motion model
+    runner clips ingest motion --manifest M --clip <key> --mode <convention> --provider ... --model ... --cost ... <result>
+    runner clips transfer --manifest M --clip <key> [--candidate N | --source generated] \
+        [--g <name> | --g-from <key>] [--no-root] [--root-ref first|bind] \
+        [--root-y hips|ground [--rig-mesh <glb>]] [--trim START:END]
+    runner clips build --manifest M --clip <key> [--anims-dir <dir>] [--time-scale <factor>]   # then let Rojo sync
+    runner clips build-kfs --manifest M --clip <key>                          # Edit; read-only verify
+    runner studio ingest build_kfs --manifest M --clip <key> <result>
+    runner clips publish-clip --manifest M --clip <key>                       # Edit
+    runner studio ingest publish_clip --manifest M --clip <key> <result>
+    runner clips bench --manifest M --clip <key> [--speed <x>] [--max-wait <s>]   # Play, Server
+    runner studio ingest bench_clip --manifest M --clip <key> <result>
+    runner clips bind --manifest M --ids <key>=<Roblox asset id> ...          # writes the two payloads
+    runner clips registered --manifest M --clip <key> --media-id <Genvid media id>
+
+- **`clips transfer`** retargets the source motion onto the rig's own rest
+  dump as world-space rotation deltas (§3 and the transfer laws below). A
+  catalog clip picks its source with `--candidate`; a generated one reads what
+  `clips ingest motion` recorded with `--source generated`. `--g <name>`
+  forces one of the axis-map candidates and `--g-from <key>` forces the map
+  another clip's transfer recorded (the two are exclusive; transfer the walk
+  first). `--no-root` emits rotations only; `--root-ref first|bind` measures
+  root motion from the clip's first frame (the default) or the bind pose;
+  `--root-y ground` is the opt-in ground lock, which skins
+  `stages.rig.artifact_glb` unless `--rig-mesh` names another glb; `--trim
+  START:END` keeps one range of the source clip, in seconds of authored time.
+- **`clips build`** writes the KeyframeSequence `<Name><Key>_v<N>.rbxmx` into
+  the directory the title's Rojo project maps into
+  `ServerStorage.Assets.Anims`, where the Studio steps read it: `--anims-dir`,
+  else `$GAME_ANIMS_DIR`. It records what the synced sequence must contain
+  (`kfs_expected`: keyframe count, last keyframe time, time scale, loop,
+  priority, root-node shape, root scale) and the title (`kfs_name`).
+  `--time-scale <factor>` multiplies the authored keyframe times; with no
+  factor the build applies the height cadence stretch (law 6), and `1` keeps a
+  clip authored on this rig at its own cadence. A re-run drops the earlier
+  verification, so a rewritten file is verified again before it is published.
+- **`clips build-kfs`** emits `build_kfs`, a read-only Studio step that reads
+  the synced sequence and the template back. `execute_luau` runs sandboxed
+  with no Network, so nothing is fetched or built in Studio. `studio ingest
+  build_kfs --clip <key>` compares the read-back with `kfs_expected`, refuses a
+  sequence that is missing or differs (naming the `clips build` and Rojo sync
+  to re-run), and records `kfs_verified`.
+- **`clips publish-clip`** emits the Studio step that publishes the title
+  `clips build` recorded, and refuses until `kfs_verified` names that same
+  title. `studio emit publish_clip` is gated the same way and refuses a CLIP
+  that is not on `stages.clips.items`, with no bypass. `--version` / `--name`
+  on `clips build` set the recorded title (`--name` when the Studio template's
+  own name may not appear in a published title); on build-kfs and
+  publish-clip they are optional and must match it.
+- **`clips bench`** plays the published id on a clone in Play (below).
+- **`clips bind`** writes the platform-tier `register_media` and
+  `finalize_media_registration` payloads for each `<key>=<id>` pair, titled
+  from the clip's `kfs_name`; the orchestrator runs them, and **`clips
+  registered`** records the finalized Genvid media id. The payload shape and
+  its source citation are below.
+- `clips impact` measures an attack clip's impact time and `clips speed-scale`
+  derives the walk's speed scale from the in-engine treadmill measurement;
+  both are numbers a title's game reads.
 
 **A title's own clip keys (`clips declare`).** The catalog's clips (Walk,
 Idle, Stun, Attack, Death, Slam) are the pack's. A title whose characters play
@@ -749,7 +759,8 @@ manifest before the first step that creates it:
 `--loop` and `--priority` (Idle, Movement or Action) are what the clip's
 KeyframeSequence is built with; `--description` is the motion `clips emit
 motion` asks a text-to-motion model for, and that step refuses a key declared
-without one. The key is letters and digits starting with a letter; a catalog
+without one. `--motion` (in_place, the default; travel; or fall) picks the
+bench gates the clip answers to (see "Bench gates" below). The key is letters and digits starting with a letter; a catalog
 clip's name, or a key that differs from another declared key or a clip
 item's key only in case, is refused.
 The declaration lands at `stages.clips.declared.<key>`; re-declaring a key
@@ -766,31 +777,32 @@ item a title's own transfer wrote is accepted there without a declaration.
 Any other key is refused by name, listing the keys that are valid. The
 published title is `<Name><Key>_v<N>` with the key's first letter upper-cased
 (`wave` publishes as `<Name>Wave_v1`); a catalog clip's title is unchanged. `clips impact`
-records one impact clip (`attackImpactClip`) whichever key it measures.
-`build_kfs` no longer builds anything in Studio and uses no Network:
-`execute_luau` runs sandboxed without the Network capability since Studio 0.739,
-so the old route (poses fetched over `HttpService` from a server the runner
-started) fails there (witnessed 2026-09-23). The rest of the clip chain runs
-under that sandbox, witnessed the same day: `HttpService:JSONEncode` (every
-step's result line), `AssetService:CreateAssetAsync` on a KeyframeSequence
-(`publish_clip`, six clips), and, in Play/Server, `Animator:LoadAnimation` of a
-published id the same account owns (`bench_clip`). `publish_clip` calls
-`AssetService:CreateAssetAsync` on the sequence directly — confirmed on the bake-off run
-to return a real Roblox asset id from the MCP bridge's Edit context; an
-earlier record that `CreateAssetAsync` rejects a MeshPart/Model never covered
-a KeyframeSequence (witnessed 2026-09-04). `wire` (same stage as `park` and
-`capture_ids`) also has to force `Humanoid.RigType` to R15 and destroy any
-`AnimationController` the 3D Importer parked beside the Humanoid the runner
-creates: both were found, on the bake-off run, to silently stall every
-animation track's `TimePosition` at zero — an R6 Humanoid never advances an
-R15 KeyframeSequence, and a live `AnimationController` competes with the
-Humanoid's own Animator so neither one advances (witnessed 2026-09-04).
+records the impact on the measured clip's own item (`impact_raw_secs`, authored,
+and `impact_delay_secs`, as the built clip plays it), so a title with several
+attack clips times each one; `stages.clips.attackImpactClip`,
+`attackImpactRawSecs` and `attackImpactDelaySecs` mirror the clip measured last,
+for readers that take one impact per title.
 
-**Clip transfer laws (witnessed 2026-09-08 on the leg B rig, pack 0.9.5).**
-Four things have to be true at once for a library clip that moves the hips
-(a stomp, a kneel, a knockback, a fall) to read correctly in the game; each
-was found by a bench that samples the LowerTorso bone's world position while
-the published clip plays, and each cost a publish-and-bind round:
+`build_kfs` builds nothing in Studio and uses no Network: `execute_luau` runs
+sandboxed without the Network capability, so a step cannot fetch over
+`HttpService`. The rest of the clip chain runs under that sandbox:
+`HttpService:JSONEncode` (every step's result line),
+`AssetService:CreateAssetAsync` on a KeyframeSequence (`publish_clip`), and,
+in Play/Server, `Animator:LoadAnimation` of a published id the same account
+owns (`bench_clip`). `publish_clip` calls `AssetService:CreateAssetAsync` on
+the sequence directly, which returns a real Roblox asset id from the MCP
+bridge's Edit context; `CreateAssetAsync` publishes a KeyframeSequence but
+rejects a MeshPart or a Model. `wire` (same stage as `park` and `capture_ids`) also
+has to force `Humanoid.RigType` to R15 and destroy any `AnimationController`
+the 3D Importer parked beside the Humanoid the runner creates: either one
+silently stalls every animation track's `TimePosition` at zero — an R6
+Humanoid never advances an R15 KeyframeSequence, and a live
+`AnimationController` competes with the Humanoid's own Animator so neither one
+advances.
+
+**Clip transfer laws.** These have to be true at once for a library clip
+that moves the hips (a stomp, a kneel, a knockback, a fall) to read correctly
+in the game:
 
 1. *Root motion is emitted.* `poses.py` writes the root bone's translation per
    frame under `frames[i].r` (the hips' world delta, mapped by the same `g` as
@@ -799,50 +811,42 @@ the published clip plays, and each cost a publish-and-bind round:
    poses doc) is the LEG-CHAIN ratio, hip joint to knee to ankle on both
    sides, between rest.json and the clip's bind: an overall-height ratio read
    off a library skeleton after the rename/merge spans about hips-to-skull,
-   not feet-to-crown, and made root motion 1.37x too large (witnessed
-   2026-09-23: a 70-stud rig's death dropped its hips 47 studs where 34.5 was
-   the clip's drop at the rig's scale). A bone scale the clip keys is stripped
-   before the transfer (one library idle keys 1.176 on Hips on every frame),
-   so every emitted quaternion is unit length. `k` also scales the truth
-   ranges the empirical axis-map pick scores against (law 2), so a clip
-   re-transferred after the leg-chain change can pick a different map than
-   before: compare the `g` the transfer records, and pin it with `--g` or
-   `--g-from`. A rotation-only transfer plays every crouch as legs folding under
-   a pelvis pinned at standing height and a fall as a torso rotating around
-   hips that stay in the air (`--no-root` keeps that output; the accepted walk
-   and idle were built on it and are not rebuilt).
-2. *The axis map is forced to the walk's* (`--g=`, above). The tangled legs on
-   the stomp were wrong rotations, not only missing translation. This rule is
+   not feet-to-crown, and makes root motion too large. A bone scale the clip
+   keys (a library clip can key a scale on Hips on every frame) is stripped
+   before the transfer, so every emitted quaternion is unit length. `k` also
+   scales the truth ranges the empirical axis-map pick scores against
+   (law 2), so re-transferring a clip can change its pick: compare the `g` the
+   transfer records, and pin it with `--g` or `--g-from`. A rotation-only
+   transfer plays every crouch as legs folding under a pelvis pinned at
+   standing height and a fall as a torso rotating around hips that stay in the
+   air (`--no-root` keeps that output).
+2. *The axis map is forced to the walk's* (`--g=`, above). A wrong map gives
+   wrong rotations, not only missing translation. This rule is
    for the EMPIRICAL branch, which vendor-library and rig-authored donors take.
    A native Mixamo donor (the archive packs) carries a toe bone, so `poses.py`
    takes its ANALYTIC branch -- facing measured from the rest skeleton, clip
    independent -- where `--g=` is not consulted (it only stamps `g_forced`);
    walk and death then share the map by construction. Confirm it: all the
-   runs on one rig print the same `analytic g (clip faces (...))` line
-   (witnessed 2026-09-10 on two adopted rigs).
+   runs on one rig print the same `analytic g (clip faces (...))` line.
 3. *The pose tree mirrors the real bone chain.* The Animator matches rotations
    by pose name whatever the tree, but it applies a TRANSLATION only when the
-   tree is `HumanoidRootPart > HumanoidRootNode > LowerTorso` (four variants
-   tried; only that one moved the hips). `clips build` writes the node pose
-   unless `stages.wire.result.hasRootNode` is false (an adopted rig without the
+   tree is `HumanoidRootPart > HumanoidRootNode > LowerTorso`. `clips build`
+   writes the node pose unless `stages.wire.result.hasRootNode` is false (an adopted rig without the
    bone, law 5); `build_kfs`'s ingest refuses a sequence whose node pose
    disagrees with the template.
 4. *The translation is divided by the model scale.* The Animator multiplies a
-   pose translation by `Model:GetScale()` (a 20-stud pose moved a 0.53-scale
-   giant 10.6 studs; the same 20 on `Bone.Transform` moved 19.4). `kfs.write`
+   pose translation by `Model:GetScale()`. `kfs.write`
    takes `root_scale`, which `clips build` feeds from
    `stages.wire.result.scale`; `build_kfs`'s ingest refuses a clip with root
    motion when the template's `GetScale()` no longer matches it.
 
 5. *A clip is bound to the skeleton it was built for.* A clip built on the
-   16-bone runner rig plays NOTHING useful on a 15-bone old-pipeline rig
-   (the hips and head never moved in 22 s; one foot lifted), because those
-   rigs hang `LowerTorso` straight under `HumanoidRootPart` with no
-   `HumanoidRootNode` for the translation to ride on. Transfer onto that
-   rig's own rest dump instead: with the tree `HumanoidRootPart > LowerTorso`
-   (no node, which `clips build` omits when the rig records no such bone)
-   the translation DOES apply on those rigs (witnessed 2026-09-10: the
-   8.7-hip rig's hips moved -7.9, the 15.0-hip rig's -13.9).
+   16-bone runner rig plays NOTHING useful on a 15-bone rig that hangs
+   `LowerTorso` straight under `HumanoidRootPart` with no `HumanoidRootNode`
+   for the translation to ride on. Transfer onto that rig's own rest dump
+   instead: with the tree `HumanoidRootPart > LowerTorso` (no node, which
+   `clips build` omits when the rig records no such bone) the translation
+   DOES apply on those rigs.
 6. *Cadence follows the square root of height.* `timing.scale_time` stretches
    a clip by `sqrt(height / 8)`, so a clip authored at height H plays on a
    rig of height h at speed `sqrt(H / h)`; the game's `deathAnimSpeed` dial
@@ -855,25 +859,25 @@ the published clip plays, and each cost a publish-and-bind round:
    number multiplies them. The factor is recorded on the clip item
    (`time_scale`) and in `kfs_expected`, and every timing derived from the
    clip reads it (`timing.clip_time`): the item's `scaled_seconds` (the bound
-   row's `duration_seconds`), `attackImpactDelaySecs` (re-derived when the clip
-   is rebuilt after `clips impact`), and eval rows E15, E20 and E21. A clip
+   row's `duration_seconds`), its `impact_delay_secs` (re-derived when the clip
+   is rebuilt after `clips impact`, with the `attackImpactDelaySecs` mirror when
+   it names the clip), and eval rows E15, E20 and E21 (E20 reads the Attack
+   clip's own impact; the mirror only where it can be the Attack clip's). A clip
    with no `time_scale` keeps the height stretch.
 
 And one reference rule: root motion is measured from the clip's FIRST FRAME
 (`--root-ref=first`, the default), because library clips do not all start at
-the bind pose (Meshy's stun and slam start 17 to 43 studs from the T-pose
-hips at giant-character scale, which bind-relative motion turned into a mesh sitting
-off its collider for the whole clip and snapping back at the end);
+the bind pose, and bind-relative motion on such a clip leaves the mesh
+sitting off its collider for the whole clip and snapping back at the end;
 `--root-ref=bind` is for a clip that starts mid-air or crouched and should
 read that way (`clips transfer --root-ref first|bind`; `--no-root` emits the
 rotation-only doc; the item records `root_ref` and `root_motion`).
 
 The hips delta alone does not keep the feet on the ground, whatever `k` or
-reference: library clips are not grounded against their own bind (measured
-on one rig's clips, 2026-09-23: a walk's lowest foot swings 8 studs under
-and 4 over the bind sole, a death sinks 14, an idle with a keyed hips scale
-hovers 3 to 4), and the rig loses the clip's toe joints. `clips transfer
---root-y ground` locks the VERTICAL root motion instead: every frame, the
+reference: library clips are not grounded against their own bind (a walk's
+lowest foot swings under and over the bind sole, a death sinks, an idle with
+a keyed hips scale hovers), and the rig loses the clip's toe joints.
+`clips transfer --root-y ground` locks the VERTICAL root motion instead: every frame, the
 offset that puts the rig's lowest skinned vertex back on its rest level (the
 ground the rig was fitted to), so a crouch, a kneel or a lie-down rests on
 the ground and nothing sinks or hovers; the horizontal still follows
@@ -883,16 +887,13 @@ similarity and refused when a bone origin misses by more than 1% of the mesh
 height (the mesh is then not the rig rest.json came from). The item records
 `root_y` (`hips`, the default, or `ground`), `k` and the fit (`ground`). The
 lock keeps the lowest point down on every frame, so a clip whose feet dig
-into the ground at toe-off bobs its hips by the dig instead (a walk measured
-above: root height swinging -5 to +6 studs); it is opt-in, and it is wrong for
-a clip meant to leave the ground. Offline, on one 70-stud rig: `hips` left
-the soles from -17 to +10 studs off the ground across six clips (a death ended
-14 under), `ground` holds 0.0 on all six. Check
+into the ground at toe-off bobs its hips by the dig instead; it is opt-in,
+and it is wrong for a clip meant to leave the ground. Check
 `frames[0].r` and `frames[-1].r` before publishing: an
 Action clip the game holds (a stun, a death) keeps its last-frame offset for
 as long as it is held, and a clip that blends back to idle snaps from it. A
-repeating library clip (Angry_Stomp is eight seconds of stomping in place)
-is trimmed to one action before building, and its impact is the first foot
+repeating library clip (several seconds of stomping in place, say) is
+trimmed to one action before building, and its impact is the first foot
 landing after the peak lift, not the global minimum the default detector
 finds across hands and feet. `clips transfer --trim START:END` does the cut:
 it keeps that range of the source clip (seconds, authored time) and re-bases
@@ -901,19 +902,20 @@ kept frame, the axis scoring and trajectories see one action, and the
 item's `clip_seconds`/`scaled_seconds` are the trimmed length. Cut to one
 action and the default impact detector finds that action's landing. A range
 that ends past the clip, or keeps fewer than two frames, is refused; the item
-records `trim`. Re-transferring a clip drops the `attackImpact*` values
-`clips impact` measured on it (re-run `clips impact`), and `clips build`
-refuses a recorded impact time past the clip's end.
+records `trim`. Re-transferring a clip drops the impact `clips impact`
+measured on it, and the mirror when it names that clip (re-run `clips
+impact`); every other clip keeps its own. `clips build` refuses a clip's
+recorded impact time past that clip's end.
 
 **Bench before you publish, sample the right property.** The bench that
 proves a clip is a Play clone with the published id (a parked, unpublished
 sequence never advances) sampling `Bone.TransformedWorldCFrame` for the
 hips, head and a foot against the sole plane. `Bone.WorldPosition` /
 `WorldCFrame` EXCLUDE the bone's own animated `Transform`, so a sampler on
-them reads every root-motion hip as 0 and the clip as "nothing moves"
-(false negative witnessed 2026-09-10).
+them reads every root-motion hip as 0 and the clip as "nothing moves", a
+false negative.
 
-**Binding a published clip (shape witnessed 2026-09-10 on two bound clips).**
+**Binding a published clip.**
 `register_media` at `storage_class="platform"` with `kind="animation-clip"`,
 `link_type="cast_member_model"`, a `.glb` filename and
 `mime_type="model/gltf-binary"` as the media-type hint (a `.rbxmx` name is
@@ -937,8 +939,8 @@ clip item: an item carries only `cost_source` (`rig`, `none`, or
 omits the cost fields, since the rig's row holds the spend.
 
 **Adopting a rig that already exists (`runner rig adopt`).** A parked template
-with no manifest — the four old-pipeline characters, or a rig handed over as a
-bare template — gets a manifest whose chain starts at `rest`; plate/mesh/rig
+with no manifest (a rig handed over as a bare template, or one built outside
+this runner) gets a manifest whose chain starts at `rest`; plate/mesh/rig
 are not on it and are not pretended. The whole sequence for one new clip:
 
     runner rig adopt --name Small --template <StudioTemplateName> --height 20 --project-id <project-id> \
@@ -948,7 +950,7 @@ are not on it and are not pretended. The whole sequence for one new clip:
     runner studio ingest adopt_inspect --manifest ... <result>                        # fills wire: scale, hip, root-node flag
     runner rig adopt-emit --manifest ... dump_rest                                    # Edit, against the parked template
     runner studio ingest dump_rest --manifest ... <result>
-    runner clips transfer --manifest ... --clip Death --candidate 1                   # archive fall (no vendor rig task on an adopted rig)
+    runner clips transfer --manifest ... --clip Death --candidate 1                   # archive fall (an adopted rig has no rig ingest)
     runner clips build --manifest ... --clip Death --anims-dir <Rojo-mapped dir>        # then let Rojo sync it
     runner clips build-kfs --manifest ... --clip Death                                # Edit, read-only verify
     runner studio ingest build_kfs --manifest ... --clip Death <result>
@@ -973,15 +975,77 @@ step reports `hipsDrop`, `hipsBack`, `headEndAboveSole` (sole plane =
 and files the timeline. A death clip passes when the hips drop by about the
 hip height, the head ends above the sole plane, and the end pose holds. Pass
 `--speed` for a walk (animSpeedScale) or a borrowed clip (law 6). `frozen` is
-the field that says whether those numbers mean anything: the step schedules
-the game's own end-pose hold (`AdjustSpeed(0)` just before the clip ends);
-when `frozen` is false the track ran out first, the Animator blended the
-clone back to its bind pose, the numbers describe that standing pose, and the
-bench must be re-run. Every Studio step ends by printing its result as one
+one of the fields that say whether those numbers mean anything. The step applies
+the game's own end-pose hold (`AdjustSpeed(0)` just before the clip ends), and
+schedules it by TRACK time: a Heartbeat watcher freezes the track once
+`TimePosition` is within three frames of `Length`. Do not schedule the hold by
+wall time. A freshly loaded track sits at `TimePosition` 0 for most of a second,
+so a wall-time hold lands that much short of the end. When `frozen` is false the
+track ran out first, the Animator blended the clone back to its bind pose, the
+numbers describe that standing pose, and the bench must be re-run. The result
+also reports `frozeTp` and `lastTp` (the frozen and the last sampled
+`TimePosition`) beside `length`: a bench whose `lastTp` is short of `length` by
+more than one sample interval (0.25 s × speed) was held before the end, and
+must be re-run too. The 0.25 s samples miss a clip's deepest frames, so the step
+also tracks per-frame `extrema` over every frame once the track has advanced,
+including the held end (`ankleMinY`,
+`hipsMinY`, `headMinY`, `hipsTravelMax`, and the `frames` counted). They are a
+few numbers, so the result stays small. Every Studio step ends by printing its result as one
 `RUNNER_RESULT <json>` line AND returning that same line: `execute_luau`
 surfaces a script's return value, not its console output, so the call's
 return is the result to save for `studio ingest` (no `get_console_output`
 needed). `mesh_dump`'s `RUNNER_CHUNK` lines are still console-only.
+
+**Bench gates (eval rows E30-E32).** The bench timeline samples the hips,
+head and both feet every 0.25 s relative to the root, so the two ways a
+transferred clip commonly goes wrong are gated off it: soles that float above or
+sink below the ground, and hips that slide away during a clip meant to play
+where it stands. The foot samples are ankle BONES, above the sole, so a sole
+is read as `ankle - (restAnkle - soleY)`: the ankle-to-sole distance the bind
+pose stands on, carried through the clip. `restAnkle` is the lower ankle before
+the track plays (the step reports it as `restAnkleY`; a bench recorded without it
+uses its first sample at track time 0, which is the bind pose). The lowest sole,
+the lowest point and the largest hips travel over the clip take the more extreme
+of the per-frame `extrema` and the samples; a bench without `extrema` is read from
+its samples alone. That distance
+ignores foot pitch, so a strongly toe-down foot reads low. Which gates a clip
+answers to follows how it moves:
+
+| Motion | Clips | Gates |
+|---|---|---|
+| `in_place` | the default: Idle, Stun, Attack, Slam, any declared key not given another | E30: the lowest sole over the clip within ±`foot_contact_frac` × height of the ground. E31: the hips' largest horizontal travel from the start ≤ `root_travel_max_frac` × height, and the end pose ≤ `root_travel_end_frac` × height from the start |
+| `fall` | Death | E30: nothing sampled (hips, head, soles) below −`foot_contact_frac` × height at any point. E32: the lowest end-pose point between −`foot_contact_frac` and +`fall_end_max_frac` × height |
+| `travel` | Walk | E30: the lowest sole over the clip within ±`foot_contact_travel_frac` × height of the ground, a looser band because a walking foot pitches and the ankle reads it low. No root travel: the clip is meant to move, and its stride is E19's |
+
+Defaults (fractions of `height_studs`): `foot_contact_frac` 0.029,
+`foot_contact_travel_frac` 0.06, `root_travel_max_frac` 0.25, `root_travel_end_frac` 0.10, `fall_end_max_frac`
+0.10. They are calibrated on one 70-stud character's benches: its accepted
+in-place clips' lowest soles read -0.54 to -0.08 studs, and two rejected for
+floating read +8.32 and +6.68. Its accepted walk's lowest sole read +0.271 (+0.004
+of height) over every frame, and a walk rejected for landing high and then
+sinking read -5.251 (-0.075 of height). Its accepted in-place hips travelled at most 4.19
+to 13.63, and a rejected slide travelled 62.25. Its accepted fall's lowest end
+point read +4.44 (the samples are bones inside the body, so a body lying on the
+ground reads above it), and a rejected fall read -26.11. A title overrides any default, and any clip's motion,
+under the manifest's top-level `bench_gates`:
+
+    "bench_gates": {"root_travel_max_frac": 0.2, "motion": {"Crawl": "travel"}}
+
+Each override is a number strictly between 0 and 1 naming a known gate, and
+`motion` is an object of clip to class. `runner eval` refuses anything else by
+name. `studio ingest bench_clip` still records the bench, and says it was not
+judged. Every limit is inclusive: a reading exactly at a limit passes.
+
+`studio ingest bench_clip` records every bench whatever it reads, and prints
+one `bench gate:` line for each breach, with the clip, the reading, its fraction
+of height and the limit. The verdict is `runner eval`'s: each row lists the
+failing clips. A clip in scope with no usable bench is listed as `<clip> (no
+bench: <why>)`: none was recorded, it was not `frozen` (the reason says whether the track ran
+out or the bench's `--max-wait` did), or it was held short of
+the clip's end (the reason gives the `TimePosition`, the length and the
+shortfall). The row also prints every clip's reading under it with the band it is held to, and writes each clip's
+readings, checks and breaches to `eval.json`'s `bench`. A row with no clip of
+its motion in scope reads PEND.
 
 **Steps a per-title skill adds.** A title that needs a Studio step of its own —
 parking a static model in its own folder, or killing a live character through its
@@ -991,7 +1055,7 @@ ingests through its own handler, so its attribute names, its remotes and the
 manifest keys it writes stay out of a pack that is mirrored publicly.
 
 **Eval matrix.** `runner eval` prints and writes the eval-matrix table, rows
-E1-E29, reading only files on disk plus the manifest — it never imports another
+E1-E32, reading only files on disk plus the manifest — it never imports another
 stage module, so it runs standalone regardless of which stages exist yet. A gate
 row with no evidence on disk reports FAIL, never PASS and never silently skipped;
 a non-gate row with no evidence reports PENDING; rows that measure a Studio
@@ -1009,95 +1073,122 @@ manifest instead of shipping a copy.
 **Platform-tier clip registration.** A published clip is platform-custodied
 media — the bytes live only as the Roblox asset id `publish_clip` returns —
 and the boundary rejects a direct multipart upload of the `.rbxmx` file
-outright (witnessed 2026-09-04). So `clips.bind()` writes
+outright. So `clips.bind()` writes
 `register_media` (`storage_class="platform"`,
 `kind="animation-clip"`, `link_type=cast_member_model`) and
 `finalize_media_registration` (`locator="rbxassetid://<id>"`,
 `locator_type="platform_asset"`) payloads for the orchestrator to run for
 real, and `clips registered --clip <name> --media-id <id>` records the
-finalized Genvid id once it does. Two boundary facts the payloads do not yet
-encode (witnessed 2026-09-08, binding a clip by hand needs both edits):
-`register_media` refuses a `.rbxmx` filename
-("Cannot determine media type"), so the name carrier is `<title>.fbx` with
-`mime_type="model/fbx"` and the real container is noted in the generation
-params; and `target="roblox"` / `stage="roblox/keyframesequence"` is not a
-known destination and stage, so a clip finalizes without target/stage.
+finalized Genvid id once it does. The payloads carry two boundary facts:
+`register_media` refuses a `.rbxmx` filename ("Cannot determine media
+type"), so the name is `<title>.glb` with `mime_type="model/gltf-binary"`, a
+media-type hint only (no file of that name exists; the original is the
+platform id); and `target="roblox"` / `stage="roblox/keyframesequence"` is not
+a known destination and stage, so a clip finalizes with no target/stage.
 Supersession is carried in the generation params (`supersedes_media_id`) and
 in `input_media_ids`, never by deleting the earlier row. `record.run()` refuses an unregistered clip
 unless run with `--allow-unregistered`, and eval row E27 reads PEND, never
 PASS, while any clip is still only "payload written."
 
-**Budget gate and cost attestation.** Every spending stage — plate, mesh, rig,
-clips, and the biome plate/sky/kit stages — calls the same `budget_gate()`:
-it reads the headroom itself with `genvid get-generation-budget-headroom
-<project> <estimate> [--asset-id <asset>]` (the REST read behind
+**Budget and claim gates, read through the genvid CLI.** Every emit gates the
+estimate the agent passes (`--estimate <USD>`, `0` for a free model: the
+check is required for every generation, a free one included). The runner reads
+the headroom itself with `genvid get-generation-budget-headroom <project>
+<estimate> [--asset-id <asset>]` (the REST read behind
 `check_generation_budget`), stores the verdict with the command, the raw
-response and the time in the manifest's `budget`, and spends only on a literal
-`fits: true`. A response for a different estimate, or with no asset headroom
-on an asset check, is refused; a refusal is read again on the next run. Every
-gate read has a 60-second timeout and names the command when it fails. The
-headroom command needs genvid CLI 0.0.5 or newer; an older CLI is refused with
-the installed version and how to upgrade (`brew upgrade genvid` or
-install.sh). No
-payload file is written and nobody records a verdict by hand: a cached
-verdict or claim status counts only when it carries the gate's own read and
-that read answers it; anything else, a hand-written `fits: true` included, is
-read again. The claim the runner writes for an unclaimed task is still a
-`create_assignment` payload: until it has run, the next bind on that asset
-stops with `ClaimPending` naming it rather than writing a second one. Every Genvid bind separately requires a non-empty
-`attested_cost_usd` decimal string; a stage with nothing to attest raises
-rather than binding silently.
+response and the time in the manifest's `budget`, and writes the request only
+on a literal `fits: true`. The verdict is keyed on the estimate, the model the
+emit named and the item set; an emit that changes any of them gates again. A
+response for a different estimate, or with no asset headroom on an asset
+check, is refused; a refusal is read again on the next run. Every gate read
+has a 60-second timeout and names the command when it fails. The headroom
+command needs genvid CLI 0.0.5 or newer; an older CLI is refused with the
+installed version and how to upgrade (`brew upgrade genvid` or install.sh).
+The claim gate reads the same way: `genvid list-tasks` (the organization id
+from `genvid get-project`), stored next to the status in the manifest's
+`claims` (§0). No payload file is written for either read and nobody records
+a verdict by hand: a cached verdict or claim status counts only when it
+carries the gate's own read and that read answers it; anything else, a
+hand-written `fits: true` included, is read again. The claim the runner
+writes for an unclaimed task is still a `create_assignment` payload: until it
+has run, the next bind on that asset stops with `ClaimPending` naming it
+rather than writing a second one.
 
-`vendors/pricing.py` splits the two numbers that used to be one. `estimate_of()`
-feeds the pre-spend gate: it runs before the vendor call, has no response to
-read, and may therefore assume a quantity — it is never attested. `cost_of()`
-derives what the vendor actually charged for a call that already happened, and
-**raises `CostNotObserved` rather than estimating**, in the same register as a
-stage with nothing to attest. An attested cost is a claim the customer makes
-and it is signed into a C2PA manifest; a guess must not be signed as an
-observation, and a warning note next to a guess is not a fix. Three consequences
-worth stating plainly, each of them paid for once:
+**Cost is attested by the agent, never priced by the runner.** The runner
+holds no price list. Every ingest carries exactly one of `--cost <amount>`
+(with `--currency <ISO 4217>`, USD by default) for what the generation cost,
+or `--cost-unobserved` for a generation that was charged at an amount not
+known. The bind sends the amount as `attested_cost_amount` /
+`attested_cost_currency`; an unobserved cost omits both, which the boundary
+records as unknown. It is never written as `0`, which is a claim that the
+generation was free. Only USD counts toward project spend and budget
+headroom: another currency is signed verbatim and does not reduce headroom.
+The estimate on emit and the cost on ingest are different numbers: the
+estimate is a pre-spend guess that feeds the gate and is never attested; the
+cost is what the provider charged for a call that already happened. An
+attested cost is signed into a C2PA manifest, so a guess must not be attested
+as an observation: when the figure is not known, attest it as unobserved.
 
-- **Unit prices come from the vendor's BILLING EXPORT, not its pricing API.**
-  A reconciliation on 2026-09-08 found `meshy/v7/multi-image-to-3d` pinned per
-  compute second, where the export bills it per generation at $0.80 — 143x
-  under, and no better quantity corrects a wrong axis. A pricing API is a
-  second-best source for the RATE and no source at all for the per-call
-  QUANTITY: it reports `tripo3d/h3.1/*` at "$0.01 per credit" and never that a
-  call consumes 30 of them. Each `PRICES` entry names the axis the export bills
-  on. Entries with no billing row are labelled `(assumption)`.
-- **No cost literal lives outside `pricing.py`** — not in a stage, and above all
-  not in an ad-hoc driver written for one production. A driver that wrote
-  `"cost_usd": "0.2000"` inline attested 62 media, 62% of that project's whole
-  attested total, at a number that never touched a unit price; the vendor
-  response with the real figure in it was in hand and discarded. Call
-  `pricing.cost_of(endpoint, response)` and let it raise. A bind with no vendor
-  call behind it (a local Blender render, a re-bind of bytes another stage
-  already paid for) attests `pricing.NO_VENDOR_CALL`, by name.
+- **Read the cost from the provider's billing record, not its pricing page.**
+  A pricing page can bill on a different axis (per call, per compute second,
+  per credit) than the one a call is charged on, and says nothing about how
+  many units one call consumes.
+- **No cost literal lives in a stage or a driver.** The one sanctioned zero
+  is a bind with no generation behind it (a local Blender step, or a re-bind
+  of bytes whose cost another row already attests), and it is attested by
+  name (`cost.NO_VENDOR_CALL`). A bundled clip's row attests no cost: the
+  rig's row carries the spend.
 - **Project spend attested this way is a FLOOR, not a total.** Attestation is
-  anchored to bound media, and only media the boundary sees can carry a
-  cost: rerolled generations, rejected candidates, and intermediate calls
-  that produce no bound row (background removal, a discarded mesh) are real
-  money that no attested figure includes. One month's reconciliation of a
-  single production put $19.54 of attested fal spend against $32.90 billed;
-  $4.50 of that gap was 15 mesh generations — rerolls — that were paid for
-  and never ingested, and so could not have been attested by any correct
-  code. Eval row E29 checks a run's summed attested cost against its budget
-  ceiling; whatever that sum comes to is a floor, on the same basis the
-  platform rules orphan charges on deleted media: **for a true total,
-  reconcile against the vendor's billing export.** Do not present an
-  attested total as a complete one.
+  anchored to bound media, and only media the boundary sees can carry a cost:
+  rerolls, rejected candidates and intermediate calls that produce no bound
+  row are real money no attested figure includes. Ingest and bind every
+  generation, a rejected one included, so its cost is on a row. Eval row E29 checks a
+  run's summed attested cost against its budget ceiling; whatever that sum
+  comes to is a floor. **For a true total, reconcile against the provider's
+  billing record.** Do not present an attested total as a complete one.
 
-    python3 runner/cli.py init --name Large --height 50 --vendor meshy --out out/Large \
-        --project <project-id> --production-title '<production title>'
-    python3 runner/cli.py plate sheet --manifest out/Large/manifest.json --plate plate.png --plate-url <hosted>
-    python3 runner/cli.py plate bind --manifest out/Large/manifest.json --create-asset
-    python3 runner/cli.py mesh gen|prep|bind --manifest ...
-    python3 runner/cli.py rig gen|r15|bind --manifest ...
-    python3 runner/cli.py studio emit dump_rest --manifest ...   # then execute_luau, then studio ingest
-    python3 runner/cli.py studio emit groundfit|settle|sethip --manifest ...
-    python3 runner/cli.py clips transfer|build --manifest ... --clip Walk
-    python3 runner/cli.py clips build-kfs|publish-clip --manifest ... --clip Walk   # each emits a Studio step: execute_luau it (build-kfs verifies the Rojo-synced build)
-    python3 runner/cli.py clips bind --manifest ... --ids Walk=<RobloxAssetId>       # the id publish-clip returned
-    python3 runner/cli.py studio emit wire|park|capture_ids --manifest ...
+A skinned-rig character, end to end, in the order the steps can run (each
+`emit` is followed by the agent running a model of the requested type, then the
+matching `ingest`; each `studio emit` is followed by `execute_luau` and the
+matching `studio ingest`):
+
+    python3 runner/cli.py init --name Large --height 50 --out out/Large --project <project-id> \
+        --production-title '<production title>' --assignee <reviewer email>
+    python3 runner/cli.py plate emit front --manifest out/Large/manifest.json --estimate <USD> --prompt '<front prompt>'
+    python3 runner/cli.py plate ingest front --manifest out/Large/manifest.json --item c1 --create-asset \
+        --provider <provider> --model <model> --cost <amount> <result>
+    python3 runner/cli.py plate select-front --manifest ... --media-id <bound candidate>
+    python3 runner/cli.py plate emit views --manifest ... --estimate <USD>           # then plate ingest views --item back|left|right
+    python3 runner/cli.py plate gaps --manifest ...                                  # limb-gap measurement for eval row E1 (needs PLATE_GAPS_PY)
+    python3 runner/cli.py mesh emit model --manifest ... --estimate <USD>
+    python3 runner/cli.py mesh ingest model --manifest ... --provider ... --model ... --cost ... <result>
+    python3 runner/cli.py rig emit model --manifest ... --estimate <USD> [--clip Walk:'<motion>']
+    python3 runner/cli.py rig ingest model --manifest ... --provider ... --model ... --cost ... --rig <result> [--clip Walk=<file>]
+    # import the R15 rig into Studio with the 3D Importer; the template now sits in workspace
+    python3 runner/cli.py studio emit scale --manifest ...                           # Edit; right after the import, before dump_rest
+    python3 runner/cli.py studio emit dump_rest --manifest ...                       # Edit
+    python3 runner/cli.py studio emit groundfit --manifest ...                       # Edit
+    python3 runner/cli.py studio emit wire --manifest ...                            # Edit
+    python3 runner/cli.py studio emit capture_ids --manifest ...                     # Edit; still in workspace (after park, pass --param MODEL_PATH=...)
+    python3 runner/cli.py studio emit park --manifest ...                            # Edit; moves the template into the park folder
+    python3 runner/cli.py studio emit settle|sethip|settle --manifest ...            # Play, Edit, Play: the hover correction
+    python3 runner/cli.py studio emit probe_feet --manifest ...                      # Edit; then studio ingest probe_feet --lod close
+    python3 runner/cli.py studio emit probe_feet --manifest ... --param LOD=far      # Edit; then studio ingest probe_feet --lod far
+    python3 runner/cli.py studio emit probe_walk --manifest ...                      # Play; eval row E24
+    python3 runner/cli.py clips transfer --manifest ... --clip Walk
+    python3 runner/cli.py clips build --manifest ... --clip Walk                     # then let Rojo sync
+    python3 runner/cli.py clips build-kfs --manifest ... --clip Walk                 # then studio ingest build_kfs --clip Walk
+    python3 runner/cli.py clips publish-clip --manifest ... --clip Walk              # then studio ingest publish_clip --clip Walk
+    python3 runner/cli.py clips bench --manifest ... --clip Walk                     # Play, Server; then studio ingest bench_clip --clip Walk
+    python3 runner/cli.py studio emit treadmill --manifest ... --param WALK_ID=rbxassetid://<id>   # Play
+    python3 runner/cli.py clips speed-scale --manifest ...                           # needs walk_speed on the manifest
+    python3 runner/cli.py studio emit treadmill_scaled --manifest ... --param WALK_ID=rbxassetid://<id>   # Play, at the derived speed
+    python3 runner/cli.py clips bind --manifest ... --ids Walk=<RobloxAssetId>       # the id publish-clip returned; the orchestrator runs the payloads
+    python3 runner/cli.py clips registered --manifest ... --clip Walk --media-id <Genvid media id>
     python3 runner/cli.py record run --manifest ...
+
+The other Studio steps are optional or situational: `inspect_template` reads an
+already-parked template's structure (attribute names and holders, Humanoid
+values, alignment settings) so a title can check the wiring against it;
+`zoo_capture` frames the Studio camera on the character for a review capture; `applymesh` is the
+surface pass above; `adopt_inspect` belongs to `rig adopt`.

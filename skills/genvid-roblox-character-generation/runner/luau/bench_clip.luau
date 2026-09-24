@@ -17,14 +17,19 @@
 -- showed hips at -7.9/+10.7). The game holds a death clip with
 -- track:AdjustSpeed(0) just before it ends (the game's own death handler does this); this
 -- bench does the same, so the verdict describes the HELD end pose. The freeze
--- is scheduled by TIME with task.delay(Length/speed - 0.05, ...), the same
--- way the game schedules it, measured from the current sample's elapsed
--- time so an asset whose Length becomes known late still freezes at the
--- clip's end -- a 0.25s poll loop cannot reliably land inside a 0.05s
--- window before the track ends and the Animator blends back (round 2,
--- witnessed live 2026-09-10: frozen false, samples 96, hipsDrop 0,
--- endedPlaying false).
+-- is scheduled by TRACK time, not wall time: a Heartbeat watcher freezes the
+-- track once TimePosition is within three frames of Length. A freeze scheduled
+-- by wall time (task.delay(Length/speed - 0.05)) landed 0.76-1.01 s of track
+-- time early on 7 of 10 benches (witnessed 2026-09-24), because a freshly
+-- loaded track sits at TimePosition 0 for most of a second before it advances.
+-- A 0.25 s poll loop cannot land inside the end window either (frozen false,
+-- witnessed 2026-09-10). The track is played non-looped, so TimePosition runs
+-- 0 -> Length once: a looping clip (a walk) is frozen after one full cycle.
+-- The result carries the frozen TimePosition (frozeTp) and the last sampled
+-- one (lastTp) beside `length`, so the ingest can tell a bench held at the
+-- clip's end from one held short of it.
 local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
 -- FindFirstChild, not [], so the assert below is the one that reports a missing
 -- template: indexing an Instance with an absent child name raises first. The
 -- folder is named from the live object, never from the rendered expression --
@@ -62,30 +67,60 @@ local function rel(b)
 	local p = b.TransformedWorldCFrame.Position - hrp.Position
 	return { p.X, p.Y, p.Z }
 end
+-- The lower ankle at rest, read before the track plays: the foot samples are
+-- ankle BONES, above the sole, and the ankle-to-sole distance the bind pose
+-- stands on is what turns an ankle height into a sole height.
+local restAnkleY = (lfoot and rfoot) and math.min(rel(lfoot)[2], rel(rfoot)[2]) or nil
+local restHips = rel(hips)
 local speed = tonumber("{{SPEED}}") or 1
 local maxWait = math.min(tonumber("{{MAX_WAIT}}") or 25, 60)
 track:Play(0, 1, speed)
 local t0 = os.clock()
 local samples = {}
-local frozen, frozeAt = false, nil
+local frozen, frozeAt, frozeTp = false, nil, nil
 local scheduled = false
+local watcher
+watcher = RunService.Heartbeat:Connect(function(dt)
+	local length = track.Length
+	if frozen or length <= 0 or not track.IsPlaying then return end
+	scheduled = true
+	if track.TimePosition >= length - math.max(0.05, 3 * dt) * speed then
+		track:AdjustSpeed(0)
+		frozen, frozeAt, frozeTp = true, os.clock() - t0, track.TimePosition
+		watcher:Disconnect()
+	end
+end)
+-- Per-frame extrema over every frame once the track has advanced
+-- (TimePosition > 0), including the held end, beside the
+-- 0.25 s timeline: a sampler that coarse misses a clip's deepest frames (a
+-- walk's lowest sole read -4.92 from its samples and -5.25 from every frame,
+-- witnessed live 2026-09-24). A
+-- handful of numbers, so the result stays small.
+local extrema = { frames = 0 }
+local function lower(key, v) if v and (extrema[key] == nil or v < extrema[key]) then extrema[key] = v end end
+local tracker = RunService.Heartbeat:Connect(function()
+	if track.TimePosition <= 0 then return end
+	local h, hd, lf, rf = rel(hips), rel(head), rel(lfoot), rel(rfoot)
+	extrema.frames += 1
+	if lf and rf then lower("ankleMinY", math.min(lf[2], rf[2])) end
+	if h then
+		lower("hipsMinY", h[2])
+		if restHips then
+			local d = math.sqrt((h[1] - restHips[1]) ^ 2 + (h[3] - restHips[3]) ^ 2)
+			if extrema.hipsTravelMax == nil or d > extrema.hipsTravelMax then extrema.hipsTravelMax = d end
+		end
+	end
+	if hd then lower("headMinY", hd[2]) end
+end)
 while os.clock() - t0 < maxWait do
 	local t = os.clock() - t0
 	table.insert(samples, { t = t, tp = track.TimePosition, hips = rel(hips), head = rel(head), lfoot = rel(lfoot), rfoot = rel(rfoot) })
-	if not scheduled and track.Length > 0 then
-		scheduled = true
-		task.delay(math.max(track.Length / speed - 0.05 - t, 0.02), function()
-			if track.IsPlaying then
-				track:AdjustSpeed(0)
-				frozen = true
-				frozeAt = os.clock() - t0
-			end
-		end)
-	end
 	if frozen and (os.clock() - t0) >= frozeAt + 0.6 then break end
-	if scheduled and not frozen and not track.IsPlaying and (os.clock() - t0) > track.Length / speed + 0.3 then break end
+	if scheduled and not frozen and not track.IsPlaying then break end
 	task.wait(0.25)
 end
+watcher:Disconnect()
+tracker:Disconnect()
 local first, last = samples[1], samples[#samples]
 local heldAtEnd = frozen and #samples >= 3 and last.hips ~= nil and samples[#samples - 1].hips ~= nil
 	and math.abs(last.hips[2] - samples[#samples - 1].hips[2]) < 0.05
@@ -96,11 +131,12 @@ local function delta(a, b, i) if a and b then return b[i] - a[i] end return nil 
 -- Returned as well as printed: execute_luau hands back the chunk's return
 -- value, not its console output.
 local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({
-	animId = "{{ANIM_ID}}", length = length, speed = speed, soleY = soleY, samples = #samples,
+	animId = "{{ANIM_ID}}", length = length, speed = speed, soleY = soleY, restAnkleY = restAnkleY, samples = #samples,
 	hipsDrop = delta(first.hips, last.hips, 2),
 	hipsBack = delta(first.hips, last.hips, 3),
 	headEndAboveSole = last.head and (last.head[2] - soleY) or nil,
-	heldAtEnd = heldAtEnd, endedPlaying = endedPlaying, frozen = frozen, frozeAt = frozeAt, scheduled = scheduled, timeline = samples,
+	heldAtEnd = heldAtEnd, endedPlaying = endedPlaying, frozen = frozen, frozeAt = frozeAt, frozeTp = frozeTp,
+	lastTp = last.tp, scheduled = scheduled, extrema = extrema, timeline = samples,
 })
 print(runnerResult)
 return runnerResult

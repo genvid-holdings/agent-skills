@@ -1,5 +1,5 @@
 """`runner eval` -- prints and writes the eval-matrix table (plan
-docs/superpowers/plans/2026-09-02-rdc-week-runner.md, "Eval matrix" section, rows E1-E29).
+docs/superpowers/plans/2026-09-02-rdc-week-runner.md, "Eval matrix" section, rows E1-E29; E30-E32 are the bench gates).
 
 Reads only files on disk plus the manifest passed in; never imports another stage
 module (mesh.py, rig.py, groundfit.py, clips.py, studio.py, wire.luau results are
@@ -15,13 +15,17 @@ here: a stage module either conforms to them or this file is updated to match):
     `{"hier":..., "frames": [{"t":..., "p": {bone: quat}}], "clip_seconds":...}`)
     per clip, plus a sibling `<Clip>.traj.json` of `{bone: [[t, x, y, z], ...]}`
     world-space trajectories for foot_lift/impact_height.
+  - `<out_dir>/clips/<Clip>.bench.json`: the `bench_clip` timeline studio.py
+    files beside the clip item's `bench` record (which carries `soleY` and, from
+    benches that report it, `restAnkleY`), read by metrics.bench_readings for
+    E30-E32.
   - `<out_dir>/eval.json`: this module's own prior output, re-read at the start
     of every run so `groundfit.gap_close` / `groundfit.gap_far`, the whole
     `groundfit.probe_close` / `groundfit.probe_far` results E13 and E14 read
     their conditions off, and `wire.walk_probe` -- all written by studio.py's
     probe_feet / probe_walk ingests directly into this file, never computed here
     -- survive a re-run instead of being wiped back to null. Every other top-level key (`mesh`, `rig`,
-    `clips`, `cost`) is this module's own and is recomputed fresh each run. Note
+    `clips`, `bench`, `cost`) is this module's own and is recomputed fresh each run. Note
     the file has NO top-level `eval` wrapper key -- `mesh.has_basecolor`, not
     `eval.mesh.has_basecolor` -- matching what `run()` below actually writes.
   - `<out_dir>/silhouette.json`: silhouette_iou.py's own `out.json` argument,
@@ -105,6 +109,40 @@ CALIBRATION = {
 }
 
 CLIP_NAMES = ("Walk", "Attack")
+
+# bench_clip gates (rows E30-E32), as fractions of height_studs, ruled
+# 2026-09-24. A title overrides any of them, and any clip's motion class, under
+# the manifest's top-level `bench_gates` ({"foot_contact_frac": ..., "motion":
+# {"Crawl": "travel"}}). Measured on one 70-stud character's benches
+# (2026-09-23/24), six clips accepted on sight and five rejected:
+#   foot_contact_frac 0.029 (2.03 studs): the accepted in-place clips' lowest
+#     soles read -0.54..-0.08; the two rejected for floating read +8.32 and +6.68.
+#   foot_contact_travel_frac 0.06 (4.20): the accepted walk's lowest sole reads
+#     +0.271 (+0.004 of height) over every frame; the walk rejected for landing
+#     high and then sinking read -5.251 (-0.075 of height).
+#   root_travel_max_frac 0.25 (17.5): the accepted in-place clips' hips travelled
+#     4.19..13.63 at most; the one rejected for sliding, 62.25.
+#   root_travel_end_frac 0.10 (7.0): the accepted ones ended 0.01..5.73 from
+#     their start; the slide ended 62.25 away.
+#   fall_end_max_frac 0.10 (7.0): the accepted fall's lowest end point read
+#     +4.44; the bench samples bones inside the body, so a body lying on the
+#     ground reads above it. The rejected fall read -26.11 (sunk).
+BENCH_GATES = {
+    "foot_contact_frac": 0.029,         # ruled 2026-09-24: in-place lowest sole within +-0.029 x height
+    "foot_contact_travel_frac": 0.06,   # ruled 2026-09-24: travel lowest sole within +-0.06 x height
+    "root_travel_max_frac": 0.25,       # ruled 2026-09-24: in-place hips travel <= 0.25 x height
+    "root_travel_end_frac": 0.10,       # ruled 2026-09-24: in-place end pose <= 0.10 x height from start
+    "fall_end_max_frac": 0.10,          # ruled 2026-09-24: fall end lowest point -0.029 .. +0.10 x height
+}
+# How a clip moves, which decides the gates it answers to (ruled 2026-09-24):
+#   in_place  plays where it stands: foot contact and root travel (E30, E31)
+#   travel    a locomotion cycle: foot contact in its own, looser band (E30);
+#             no root travel, since it is meant to move
+#   fall      ends on the ground: never below it, and the end pose on it (E30, E32)
+# A catalog clip's class is here; a declared key's is its declaration's
+# `motion`; anything else is in_place, the strictest.
+MOTIONS = ("in_place", "travel", "fall")
+CATALOG_MOTION = {"Walk": "travel", "Death": "fall"}
 BRANDS = ("mixamo", "meshy", "quaternius", "tripo", "cascadeur")
 
 
@@ -171,6 +209,8 @@ class Ctx:
         self.eval_prior = _load_json(self.out / "eval.json") or {}
         self.silhouette = _load_json(self.out / "silhouette.json")
         self.cost_totals = cost.totals(m)
+        self.gates = bench_gates(m)
+        self.bench = _bench_verdicts(self)
         self.clip_poses = {}
         self.clip_traj = {}
         for clip in CLIP_NAMES:
@@ -437,7 +477,19 @@ def _row_E19(ctx):
 
 
 def _row_E20(ctx):
-    return _dig(ctx.m, "stages.clips.attackImpactDelaySecs")
+    """The Attack clip's own impact delay (`items.Attack.impact_delay_secs`,
+    clips.impact() records one per clip). The stages.clips mirror of the clip
+    measured last stands in only where it can be the Attack clip's: it names
+    Attack (or no clip, as before the mirror recorded one) on a manifest
+    measured before per-clip impacts, or the title has no Attack item at all.
+    A re-transferred Attack beside another clip's mirror reads None."""
+    st = _dig(ctx.m, "stages.clips") or {}
+    attack = (st.get("items") or {}).get("Attack")
+    if attack is not None and attack.get("impact_delay_secs") is not None:
+        return attack["impact_delay_secs"]
+    if attack is None or st.get("attackImpactClip") in (None, "Attack"):
+        return st.get("attackImpactDelaySecs")
+    return None
 
 
 def _row_E21(ctx):
@@ -446,7 +498,7 @@ def _row_E21(ctx):
     feet_y = ctx.feet_y()
     if not traj or impact_t is None or feet_y is None:
         return None
-    # `stages.clips.attackImpactDelaySecs` (E20's value, `impact_t` here) is
+    # E20's value (`impact_t` here, the Attack item's impact_delay_secs) is
     # SCALED -- clips.impact() applies timing.scale_time before recording it
     # -- but `<Attack>.traj.json` holds the RAW, unscaled sample times poses.py
     # wrote (kfs.write is what scales, and it never touches the .traj.json
@@ -534,6 +586,189 @@ def _cost_detail(ctx):
     detail = dict(ctx.cost_totals)
     detail["usd"] = float(detail["usd"]) if detail["usd"] is not None else None
     return detail
+
+
+def bench_gates(m):
+    """BENCH_GATES with the title's `bench_gates` overrides applied. Each override
+    is a number strictly between 0 and 1 (a fraction of height) and names a
+    known gate; anything else is refused by name."""
+    overrides = m.get("bench_gates") or {}
+    if not isinstance(overrides, dict):
+        raise ValueError("bench_gates: must be an object of gate fractions and `motion`, got %r" % (overrides,))
+    gates = dict(BENCH_GATES)
+    for k, v in overrides.items():
+        if k == "motion":
+            if not isinstance(v, dict):
+                raise ValueError("bench_gates.motion: an object of {clip: class}, got %r" % (v,))
+            continue
+        if k not in BENCH_GATES:
+            raise ValueError("bench_gates.%s: not a bench gate (one of %s, or motion)"
+                             % (k, ", ".join(sorted(BENCH_GATES))))
+        if not _is_number(v) or not 0 < v < 1:
+            raise ValueError("bench_gates.%s: a fraction of height strictly between 0 and 1, got %r" % (k, v))
+        gates[k] = float(v)
+    return gates
+
+
+def foot_band(m, motion):
+    """The +- band, in studs, the lowest sole of a clip of this motion must stay
+    within (a fall's is its never-below floor)."""
+    gates = bench_gates(m)
+    frac = gates["foot_contact_travel_frac"] if motion == "travel" else gates["foot_contact_frac"]
+    return frac * float(m["height_studs"])
+
+
+def clip_motion(m, clip):
+    """The clip's motion class: the title's `bench_gates.motion` override, then a
+    declared key's `motion`, then the catalog's, then in_place."""
+    override = ((m.get("bench_gates") or {}).get("motion") or {}).get(clip)
+    entry = _dig(m, "stages.clips.declared.%s" % clip)
+    declared = entry.get("motion") if isinstance(entry, dict) else None
+    motion = override or declared or CATALOG_MOTION.get(clip) or "in_place"
+    if motion not in MOTIONS:
+        raise ValueError("clip %s: motion %r is none of %s" % (clip, motion, ", ".join(MOTIONS)))
+    return motion
+
+
+def _bench_timeline(m, clip, bench):
+    canonical = Path(m["out_dir"]) / "clips" / ("%s.bench.json" % clip)
+    for p in (bench.get("timeline_file"), canonical):
+        if p and Path(p).is_file():
+            return _load_json(p)
+    return None
+
+
+# A bench is read only when it is HELD AT THE CLIP'S END: frozen, with its last
+# sampled TimePosition within BENCH_END_SLACK sample intervals of the clip's
+# length. The sampler reads every 0.25 s of wall time (0.25 x speed of track
+# time), and the freeze lands within three frames of the end, so one sample
+# interval admits every freeze that reached the end while refusing the
+# 0.76-1.01 s shortfalls the wall-time freeze produced (7 of 10 benches,
+# witnessed 2026-09-24; the three that reached the end were 0.029-0.049 short).
+BENCH_SAMPLE_SECONDS = 0.25
+BENCH_END_SLACK = 1
+# Limits are inclusive, compared with this much slack in studs so a reading of
+# exactly the limit is not failed on float noise.
+BENCH_LIMIT_EPS = 1e-6
+
+
+def _bench_unusable(bench, timeline):
+    """Why a bench cannot be judged, or None when it can."""
+    if not isinstance(bench, dict):
+        return "no bench recorded"
+    if bench.get("frozen") is not True:
+        # endedPlaying is track.IsPlaying when the bench stopped sampling.
+        if bench.get("endedPlaying") is True:
+            return "not frozen: the bench's max wait ran out with the track still playing (raise --max-wait)"
+        if bench.get("endedPlaying") is False:
+            return "not frozen: the track ran out and blended back to the bind pose"
+        return "not frozen"
+    if not timeline:
+        return "no timeline"
+    length = bench.get("length")
+    last_tp = bench.get("lastTp", timeline[-1].get("tp"))
+    if not _is_number(length) or not _is_number(last_tp):
+        return "no clip length or last TimePosition"
+    slack = BENCH_END_SLACK * BENCH_SAMPLE_SECONDS * float(bench.get("speed") or 1)
+    if last_tp < length - slack:
+        return "held at TimePosition %.3f of %.3f, %.3f s short of the end" % (last_tp, length, length - last_tp)
+    return None
+
+
+def judge_readings(m, clip, motion, readings):
+    """`(checks, breaches)` for bench readings against the gates of `motion`:
+    `checks` maps each gate onto True/False (None when unmeasured), `breaches`
+    names each failed check with its measured value and inclusive limit."""
+    height = float(m["height_studs"])
+    gates = bench_gates(m)
+    tol = gates["foot_contact_frac"] * height
+    band = foot_band(m, motion)
+    limits = {
+        "foot_contact": ("lowest_sole", -band, band),
+        "root_travel": ("root_travel_max", None, gates["root_travel_max_frac"] * height),
+        "root_travel_end": ("root_travel_end", None, gates["root_travel_end_frac"] * height),
+        "never_below": ("lowest_point", -tol, None),
+        "fall_end": ("end_lowest", -tol, gates["fall_end_max_frac"] * height),
+    }
+    names = {"in_place": ("foot_contact", "root_travel", "root_travel_end"),
+             "fall": ("never_below", "fall_end"),
+             "travel": ("foot_contact",)}[motion]
+    checks, breaches = {}, []
+    for name in names:
+        key, lo, hi = limits[name]
+        v = readings.get(key) if readings else None
+        if v is None:
+            checks[name] = None
+            continue
+        ok = (lo is None or v >= lo - BENCH_LIMIT_EPS) and (hi is None or v <= hi + BENCH_LIMIT_EPS)
+        checks[name] = ok
+        if not ok:
+            breaches.append("%s %s: %s %.2f studs (%.3f of height), limit %s"
+                            % (clip, name, key, v, v / height,
+                               " .. ".join("%.2f" % b if b is not None else "-" for b in (lo, hi))))
+    return checks, breaches
+
+
+def bench_verdict(m, clip):
+    """One benched clip against the bench gates: `{motion, readings, checks,
+    breaches, unusable}`. `unusable` says why the bench cannot be judged (none
+    recorded, not frozen, or held short of the clip's end); then `readings` is
+    None and every check is None. Otherwise `readings` is metrics.bench_readings
+    and `checks`/`breaches` are judge_readings'."""
+    motion = clip_motion(m, clip)
+    bench = _dig(m, "stages.clips.items.%s.bench" % clip)
+    timeline = _bench_timeline(m, clip, bench) if isinstance(bench, dict) else None
+    unusable = _bench_unusable(bench, timeline)
+    readings = None
+    if unusable is None:
+        readings = metrics.bench_readings(timeline, bench.get("soleY"), bench.get("restAnkleY"),
+                                          bench.get("extrema"))
+        if readings is None:
+            unusable = "timeline has no played samples or no sole plane"
+    checks, breaches = judge_readings(m, clip, motion, readings)
+    return {"motion": motion, "readings": readings, "checks": checks, "breaches": breaches,
+            "unusable": unusable}
+
+
+def _bench_verdicts(ctx):
+    items = _dig(ctx.m, "stages.clips.items")
+    if not isinstance(items, dict):
+        return {}
+    return {clip: bench_verdict(ctx.m, clip) for clip in sorted(items)}
+
+
+def _bench_row(ctx, checks, motions):
+    """Clips failing any of `checks` (a clip with no usable bench is listed as
+    `<clip> (no bench: <why>)`), over the clips whose motion is in `motions`; None when
+    no clip is in scope."""
+    scoped = {c: v for c, v in ctx.bench.items() if v["motion"] in motions}
+    if not scoped:
+        return None
+    failing = []
+    for clip, v in scoped.items():
+        results = [v["checks"].get(c) for c in checks if c in v["checks"]]
+        if any(r is None for r in results):
+            failing.append("%s (no bench: %s)" % (clip, v.get("unusable") or "unmeasured"))
+        elif not all(results):
+            failing.append(clip)
+    return failing
+
+
+def _bench_readings_fn(keys_by_motion, label=None):
+    """Each in-scope clip's gated readings, `{"<clip> <reading>[ <label>]": studs}`;
+    `label(ctx, motion)` names the band the reading is held to."""
+    def readings(ctx):
+        out, height = {"gated": None}, float(ctx.m["height_studs"])
+        for clip, v in ctx.bench.items():
+            for key in keys_by_motion.get(v["motion"], ()):
+                val = (v["readings"] or {}).get(key)
+                name = "%s %s" % (clip, key)
+                if label is not None:
+                    name += " " + label(ctx, v["motion"])
+                out[name] = val
+                out[name + "_frac"] = None if val is None else val / height
+        return out
+    return readings
 
 
 def _bound_media_count(m):
@@ -666,8 +901,9 @@ def build_rows(ctx):
         readings_fn=_row_E12_readings)
     # E13 is the settle loop's exit test, so it reads a gap only when the probe
     # stood the rig at the height a VERIFICATION settle measured in Play
-    # (groundfit -> settle -> sethip -> settle -> probe_feet); posed at the hip
-    # instead it reads the hover constant back and passes without verifying.
+    # (groundfit -> wire -> park -> settle -> sethip -> settle -> probe_feet);
+    # posed at the hip instead it reads the hover constant back and passes
+    # without verifying.
     # E14 is PEND until the vertex read itself happens in Play, which waits on
     # the experience's Mesh & Image API setting -- in Edit the far read is the
     # close read again (RenderFidelity does not change vertex data, and the pose
@@ -687,14 +923,15 @@ def build_rows(ctx):
     add("E18", "clips", "Walk knee twist fraction", "auto", True, "eval.clips.Walk.knee_twist_frac", _row_E18, _le(0.25), "<= 0.25")
     add("E19", "clips", "no slide (treadmill)", "auto", True, "stages.clips.treadmill_scaled", _row_E19,
         _le(0.10), "post-scale stride within 10% of walkSpeed")
-    # attackImpactDelaySecs (v) is SCALED (clips.impact() applies
+    # the impact delay (v) is SCALED (clips.impact() applies
     # timing.scale_time); clip_poses["Attack"]["clip_seconds"] is the RAW,
     # unscaled duration poses.py wrote -- comparing a scaled t against a raw
     # upper bound makes this gate unpassable for any character taller than
     # REF_HEIGHT (e.g. 0.2 < 2.0 < 1.1 is False at 50 studs). Compare against
     # stages.clips.items.Attack.scaled_seconds instead, the same scaled
     # duration transfer() already recorded alongside the raw one.
-    add("E20", "clips", "attack impact defined", "auto", True, "stages.clips.attackImpactDelaySecs", _row_E20,
+    add("E20", "clips", "attack impact defined", "auto", True,
+        "stages.clips.items.Attack.impact_delay_secs, else stages.clips.attackImpactDelaySecs", _row_E20,
         lambda v: 0.2 < v < (_dig(ctx.m, "stages.clips.items.Attack.scaled_seconds") or float("inf")) - 0.1,
         "0.2s < t < scaled clip_seconds - 0.1s")
     add("E21", "clips", "attack reaches the ground", "auto", True, "eval.clips.Attack.impact_height", _row_E21,
@@ -717,6 +954,34 @@ def build_rows(ctx):
     add("E28", "record", "no hand-tuned values", "auto", False, "stages.record", _row_E28, _no_hand_tuned, "empty")
     add("E29", "any", "cost", "auto", False, "eval.cost", _row_E29,
         lambda v: v <= 25.0, "a full character <= $25 attested USD; a static prop <= $6 each")
+    # E30-E32 read the bench timelines (`clips bench`) against BENCH_GATES; each
+    # names the failing clips, and the readings under it give every clip's number.
+    # A row with no clip of its motion class in scope reads PEND.
+    fc_scope = ("in_place", "travel", "fall")
+
+    def fc_label(c, motion):
+        if motion == "fall":
+            return "(>= -%.2f)" % foot_band(c.m, "in_place")
+        return "(+-%.2f)" % foot_band(c.m, motion)
+
+    add("E30", "clips", "foot contact (bench)", "auto", _bench_row(ctx, ("foot_contact", "never_below"), fc_scope) is not None,
+        "stages.clips.items.<Clip>.bench + <Clip>.bench.json",
+        lambda c: _bench_row(c, ("foot_contact", "never_below"), fc_scope), lambda v: len(v) == 0,
+        "lowest sole within +-%.3f x height in place, +-%.3f x height travelling; fall: nothing below -%.3f x height"
+        % (ctx.gates["foot_contact_frac"], ctx.gates["foot_contact_travel_frac"], ctx.gates["foot_contact_frac"]),
+        readings_fn=_bench_readings_fn({"in_place": ("lowest_sole",), "travel": ("lowest_sole",),
+                                        "fall": ("lowest_point",)}, label=fc_label))
+    add("E31", "clips", "root travel, in-place (bench)", "auto", _bench_row(ctx, ("root_travel", "root_travel_end"), ("in_place",)) is not None,
+        "stages.clips.items.<Clip>.bench + <Clip>.bench.json",
+        lambda c: _bench_row(c, ("root_travel", "root_travel_end"), ("in_place",)), lambda v: len(v) == 0,
+        "hips travel <= %.2f x height, end <= %.2f x height from start"
+        % (ctx.gates["root_travel_max_frac"], ctx.gates["root_travel_end_frac"]),
+        readings_fn=_bench_readings_fn({"in_place": ("root_travel_max", "root_travel_end")}))
+    add("E32", "clips", "fall ends on the ground (bench)", "auto", _bench_row(ctx, ("fall_end",), ("fall",)) is not None,
+        "stages.clips.items.<Clip>.bench + <Clip>.bench.json",
+        lambda c: _bench_row(c, ("fall_end",), ("fall",)), lambda v: len(v) == 0,
+        "lowest end point within -%.3f .. +%.2f x height" % (ctx.gates["foot_contact_frac"], ctx.gates["fall_end_max_frac"]),
+        readings_fn=_bench_readings_fn({"fall": ("end_lowest",)}))
     return rows
 
 
@@ -789,6 +1054,7 @@ def run(m, stage=None):
                      "symmetry_min_frac": _row_E10c(ctx)}
     result["clips"] = {clip: clip_block(clip) for clip in CLIP_NAMES}
     result["cost"] = _cost_detail(ctx)
+    result["bench"] = ctx.bench
     result.setdefault("groundfit", {})
     result.setdefault("wire", {})
     result.setdefault("record", {})

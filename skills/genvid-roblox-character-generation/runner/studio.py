@@ -3,20 +3,45 @@
 Orchestrator protocol per Studio step:
 
     runner studio emit <step> --manifest m            # writes <out>/studio/<step>.luau
-    <execute it in Studio; Edit mode, except treadmill/probe_walk/settle, which need Play>
+    <execute it in Studio; Edit mode, except the Play steps below>
     <save the RUNNER_RESULT line the step returns into <out>/studio/<step>.result.json>
     runner studio ingest <step> --manifest m <file>
+
+The Play steps are `settle` and `bench_clip` (both in the Server datamodel),
+`probe_walk`, and `treadmill`/`treadmill_scaled`. Each clones the parked
+template into a running world and measures it over time: a Humanoid standing,
+a MoveTo walk, or a published clip's track playing. Every other step, including
+`probe_feet`, runs in Edit.
 
 Every step both prints and returns that line, since `execute_luau` hands back a
 script's return value and not its console output. The result file may hold
 either the bare JSON object or the line verbatim (`RUNNER_RESULT {...}`);
 `ingest` accepts both.
 
+RUN ORDER. Which template a step reads sets the order the steps run in.
+`scale`, `dump_rest`, `groundfit`, `wire` and `capture_ids` read the imported
+template in `workspace`, through MODEL_PATH (default
+`workspace:FindFirstChild("<template>", true)`, set in emit()). `park` MOVES it
+into the park folder, and every later step (`settle`, `sethip`, `probe_feet`,
+`probe_walk`, `treadmill`, `bench_clip`, `build_kfs`, `publish_clip`) reads it
+from PARK_FOLDER, as does `inspect_template`, which reads a template already
+parked there. So `wire` and `park` run right after `groundfit`, before the
+settle loop and before any clip is built:
+
+    scale -> dump_rest -> groundfit -> wire -> capture_ids -> park
+      -> settle -> sethip -> settle -> probe_feet (close, far) -> probe_walk -> clip route
+
+`capture_ids` runs before `park` with the default MODEL_PATH, or after it with
+`--param MODEL_PATH=<park folder expression>["<template>"]`.
+
 The two eval probes are steps here too, and land in `<out>/eval.json` where
 eval_cmd's E13/E14/E24 rows read them -- never in the manifest, since they measure
 the parked template rather than produce a stage artifact. `probe_feet` measures one
-LOD per run, so its ingest requires the LOD to be named rather than assumed:
+LOD per run: LOD is a render parameter (default close), so the far run is emitted
+with `--param LOD=far`, and its ingest requires the LOD to be named rather than
+assumed:
 
+    runner studio emit probe_feet --manifest m --param LOD=far
     runner studio ingest probe_feet --manifest m --lod far <file>
 
 `probe_feet` runs in EDIT, not Play: it needs EditableMesh, which in Play fails
@@ -29,13 +54,18 @@ HumanoidRootPart bottom sits at HipHeight + e, with e constant per rig
 (0.45 / 0.89 / 1.03 studs on the three bake-off legs). So groundfit's own
 `hipHeight` is the sole offset, not the hip, and the correction is
 hip = soleOffset - e. It takes FIVE steps, not four, because the last one is
-the loop's exit test and an exit test has to be a measurement:
+the loop's exit test and an exit test has to be a measurement. `groundfit`
+reads the template in workspace and the rest read it from the park folder, so
+`wire` and `park` run between them (RUN ORDER, above):
 
     runner studio emit groundfit ... ; ingest groundfit ...   # EDIT: soleOffset
+    runner studio emit wire ...      ; ingest wire ...        # EDIT: wires the rig
+    runner studio emit park ...      ; ingest park ...        # EDIT: moves it into the park folder
     runner studio emit settle ...    ; ingest settle ...      # PLAY: measures e
     runner studio emit sethip ...    ; ingest sethip ...      # EDIT: writes the fix
     runner studio emit settle ...    ; ingest settle ...      # PLAY: verifies it
-    runner studio emit probe_feet ...; ingest probe_feet --lod close|far ...
+    runner studio emit probe_feet ...; ingest probe_feet --lod close ...    # EDIT: close LOD
+    runner studio emit probe_feet --param LOD=far ...; ingest probe_feet --lod far ...   # EDIT: far LOD
 
 `sethip`'s HIP comes from `stages.groundfit.corrected_hip`, which the `settle`
 ingest computes. `probe_feet`'s SETTLED_BOTTOM comes from the SECOND settle --
@@ -53,6 +83,7 @@ hip reads -e, which passes the +-0.5 gate on a rig nothing verified).
 import json
 import re
 from pathlib import Path
+import eval_cmd
 import groundfit
 import manifest
 import metrics
@@ -62,6 +93,8 @@ LUAU = Path(__file__).parent / "luau"
 # caller's own directory, so a downstream skill can add steps -- or override one --
 # without editing this package; the pack's own templates stay last.
 TEMPLATE_DIRS = [LUAU]
+# The steps the CLI accepts (its `choices`), not the order they run in: see RUN
+# ORDER in the module docstring.
 STEPS = ["inspect_template", "scale", "dump_rest", "groundfit", "settle", "sethip", "wire", "park",
          "capture_ids", "treadmill", "treadmill_scaled", "zoo_capture", "probe_feet", "probe_walk",
          "build_kfs", "publish_clip", "applymesh", "adopt_inspect", "bench_clip"]
@@ -479,6 +512,20 @@ def ingest(m, step, result_path, lod=None, clip=None):
         items[clip] = item
         manifest.set_stage(m, "clips", items=items)
         manifest.save(m)
+        if step == "bench_clip":
+            # Recorded whatever it reads: the gates are eval rows E30-E32, so a
+            # breach is named here and judged by `runner eval`, never refused --
+            # not even a bad bench_gates override, which `runner eval` names.
+            try:
+                verdict = eval_cmd.bench_verdict(m, clip)
+            except ValueError as e:
+                print("bench gate: %s recorded but not judged: %s" % (clip, e))
+                return data
+            for line in verdict["breaches"]:
+                print("bench gate: %s (eval rows E30-E32)" % line)
+            if verdict["unusable"]:
+                print("bench gate: %s cannot be judged (%s); re-run the bench "
+                      "(eval rows E30-E32 list it)" % (clip, verdict["unusable"]))
         return data
     if step == "dump_rest":
         assert "LowerTorso" in data, "rest dump lacks LowerTorso"
@@ -549,9 +596,12 @@ def ingest(m, step, result_path, lod=None, clip=None):
     elif step == "park":
         # park, capture_ids and zoo_capture all share the "wire" stage, so each
         # gets its own key. Routing park through the catch-all below would put
-        # {"parked": ...} on stages.wire.result under the mandated order
-        # wire -> park -> capture_ids, wiping the four self-checks eval_cmd's
-        # E23 gate reads while is_done(m, "wire") stays True and hides the loss.
+        # {"parked": ...} on stages.wire.result after `wire` had written it,
+        # wiping the four self-checks eval_cmd's E23 gate reads while
+        # is_done(m, "wire") stays True and hides the loss. `park` always follows
+        # `wire`; `capture_ids` comes before `park` with the default MODEL_PATH,
+        # or after it only with `--param MODEL_PATH=<park folder>["<template>"]`
+        # (RUN ORDER, in the module docstring).
         manifest.set_stage(m, "wire", parked=data)
     elif step == "treadmill":
         manifest.set_stage(m, "clips", treadmill=data)

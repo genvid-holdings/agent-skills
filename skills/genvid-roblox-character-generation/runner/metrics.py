@@ -135,3 +135,92 @@ def impact_height(traj, impact_t, feet_y, bones=("LeftFoot", "RightFoot", "LeftH
                 v = y - feet_y
                 best = v if best is None else min(best, v)
     return best if best is not None else float("inf")
+
+# bench_clip readings. A timeline sample is {t, tp, hips, head, lfoot, rfoot},
+# each point [x, y, z] relative to the anchored HumanoidRootPart; soleY is the
+# sole plane (the ground) on the same axes. The feet are ANKLE bones, which sit
+# above the sole, so a foot's sole is read as ankle - (restAnkle - soleY): the
+# ankle-to-sole distance the bind pose stands on, carried through the clip.
+# restAnkle is the lower ankle at rest (a bind pose need not stand both feet at
+# one height). A bench that did not report it falls back to its first sample
+# played at track time 0, which is the bind pose: the Animator has not stepped
+# yet. That offset ignores foot pitch, so a toe-down foot reads low.
+BENCH_POINTS = ("hips", "head", "lfoot", "rfoot")
+
+
+def _bench_rest_ankle(timeline, rest_ankle):
+    if rest_ankle is not None:
+        return float(rest_ankle)
+    for s in timeline:
+        if s.get("tp") == 0 and s.get("lfoot") and s.get("rfoot"):
+            return min(s["lfoot"][1], s["rfoot"][1])
+    return None
+
+
+def bench_readings(timeline, sole_y, rest_ankle=None, extrema=None):
+    """Heights above the ground and hip travel over a benched clip, in studs,
+    read off the samples the clip actually played (track time > 0; the held end
+    pose is the last one). None when the timeline cannot answer:
+
+      lowest_sole        the lower foot's sole at its lowest over the clip
+                         (0 on the ground, + floating, - sunk)
+      lowest_point       the lowest of the hips, head and both soles over the clip
+      end_lowest         that lowest point in the end pose
+      root_travel_max    the hips' largest horizontal distance from where they start
+      root_travel_end    the hips' horizontal distance from the start in the end pose
+      source             "frames" when the over-the-clip readings include the
+                         bench's per-frame `extrema`, else "samples"
+
+    `extrema` (a bench that reports it) holds the per-frame minima of the lower
+    ankle, the hips and the head (`ankleMinY`, `hipsMinY`, `headMinY`) and the
+    hips' largest horizontal distance from rest (`hipsTravelMax`), over every
+    frame once the track has advanced, including the held end. The 0.25 s samples miss a clip's deepest frames, so each
+    over-the-clip reading takes the more extreme of the frames and the samples
+    (the samples are frames too); the end-pose readings come from the last
+    sample, the held pose.
+    """
+    if not timeline or sole_y is None:
+        return None
+    rest = _bench_rest_ankle(timeline, rest_ankle)
+    played = [s for s in timeline if (s.get("tp") or 0) > 0 and all(s.get(k) for k in BENCH_POINTS)]
+    if rest is None or not played:
+        return None
+    offset = rest - sole_y
+
+    def soles(s):
+        return min(s["lfoot"][1], s["rfoot"][1]) - offset - sole_y
+
+    def lowest(s):
+        return min(soles(s), s["hips"][1] - sole_y, s["head"][1] - sole_y)
+
+    start = timeline[0]["hips"] if timeline[0].get("hips") else [0, 0, 0]
+
+    def travel(s):
+        return math.hypot(s["hips"][0] - start[0], s["hips"][2] - start[2])
+
+    out = {
+        "sole_offset": offset,
+        "lowest_sole": min(soles(s) for s in played),
+        "lowest_point": min(lowest(s) for s in played),
+        "end_lowest": lowest(played[-1]),
+        "root_travel_max": max(travel(s) for s in played),
+        "root_travel_end": travel(played[-1]),
+        "source": "samples",
+    }
+    frames = extrema if isinstance(extrema, dict) and (extrema.get("frames") or 0) > 0 else None
+    if frames is not None:
+        def num(key):
+            v = frames.get(key)
+            return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+        ankle, hips, head, far = num("ankleMinY"), num("hipsMinY"), num("headMinY"), num("hipsTravelMax")
+        if ankle is not None:
+            out["lowest_sole"] = min(out["lowest_sole"], ankle - offset - sole_y)
+        points = [v for v in (None if ankle is None else ankle - offset - sole_y,
+                              None if hips is None else hips - sole_y,
+                              None if head is None else head - sole_y) if v is not None]
+        if points:
+            out["lowest_point"] = min([out["lowest_point"]] + points)
+        if far is not None:
+            out["root_travel_max"] = max(out["root_travel_max"], far)
+        out["source"] = "frames"
+    return out
