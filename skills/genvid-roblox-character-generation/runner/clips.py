@@ -4,7 +4,8 @@ Per logical clip (`clipsources.CATALOG`): `transfer()` runs `blender/poses.py`
 on the chosen candidate to produce a poses JSON in the target rig's own
 world-space rest frame; `build()` writes the KeyframeSequence `.rbxmx` the
 title's Rojo project syncs into Studio; `impact()` and `speed_scale()` compute the two
-game-facing numbers (`attackImpactDelaySecs`, `animSpeedScale`) the interface
+game-facing numbers (each clip's `impact_delay_secs`, mirrored as
+`attackImpactDelaySecs`, and `animSpeedScale`) the interface
 contract hands to the game's own character-type table; `build_kfs()` emits the
 Studio step that verifies the synced sequence against what `build()` recorded,
 and `publish_clip()` the one that publishes it with
@@ -40,6 +41,7 @@ from pathlib import Path
 
 import budget
 import clipsources
+import eval_cmd
 import genvid_bind
 import kfs
 import manifest
@@ -137,15 +139,16 @@ CLIP_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
 
 
 def declared(m):
-    """`{key: {loop, priority, description}}` this manifest's title declared."""
+    """`{key: {loop, priority, description, motion}}` this manifest's title declared."""
     return dict((m["stages"].get("clips") or {}).get("declared") or {})
 
 
-def declare(m, clip, *, loop, priority, description=None):
+def declare(m, clip, *, loop, priority, description=None, motion="in_place"):
     """Declare `clip` as one of this title's own clip keys, with the loop and
     priority its KeyframeSequence is built with and, optionally, the motion a
     text-to-motion model is asked for (`clips emit motion` refuses a key
-    without one).
+    without one). `motion` is how the clip moves, which picks the bench gates
+    it answers to (eval_cmd.MOTIONS: in_place, travel or fall).
 
     Refuses a key outside the published-title grammar, a catalog clip, and a
     key that differs from a catalog key, a declared key or a key already on
@@ -158,6 +161,8 @@ def declare(m, clip, *, loop, priority, description=None):
                          "part of the published title)" % (clip,))
     if priority not in kfs.PRIORITY:
         raise ValueError("clips declare %s: --priority must be one of %s" % (clip, ", ".join(kfs.PRIORITY)))
+    if motion not in eval_cmd.MOTIONS:
+        raise ValueError("clips declare %s: --motion must be one of %s" % (clip, ", ".join(eval_cmd.MOTIONS)))
     items = (m["stages"].get("clips") or {}).get("items") or {}
     for other, kind in ([(k, "catalog clip") for k in clipsources.CATALOG] + [(k, "declared key") for k in declared(m)]
                         + [(k, "clip item") for k in items]):
@@ -166,7 +171,7 @@ def declare(m, clip, *, loop, priority, description=None):
                              "and differs from every other key and clip item by more than case"
                              % (clip, kind, other, ", ".join(sorted(clipsources.CATALOG))))
     keys = declared(m)
-    keys[clip] = {"loop": bool(loop), "priority": priority, "description": description or None}
+    keys[clip] = {"loop": bool(loop), "priority": priority, "description": description or None, "motion": motion}
     manifest.set_stage(m, "clips", declared=keys)
     manifest.save(m)
     return keys[clip]
@@ -252,8 +257,23 @@ ROOT_REFS = ("first", "bind")
 # Vertical root motion (poses.py --root-y): the proportional hips delta, or the
 # ground lock that keeps the rig's lowest skinned vertex on the ground.
 ROOT_YS = ("hips", "ground")
-# What `impact()` records on stages.clips, all of it for one clip (attackImpactClip).
+# What `impact()` records on the measured clip's own item: every clip keeps its
+# own impact, so a title with several attack clips times each one.
+ITEM_IMPACT_KEYS = ("impact_delay_secs", "impact_raw_secs")
+# The stages.clips mirror of the clip `impact()` measured last (attackImpactClip),
+# kept for the readers that predate per-clip impacts.
 IMPACT_KEYS = ("attackImpactDelaySecs", "attackImpactRawSecs", "attackImpactClip")
+
+
+def raw_impact(m, clip):
+    """The authored impact time recorded for `clip`: its item's
+    `impact_raw_secs`, else the stages.clips mirror when that names `clip` (a
+    manifest measured before impacts were recorded per clip). None if neither."""
+    st = m["stages"].get("clips") or {}
+    raw = ((st.get("items") or {}).get(clip) or {}).get("impact_raw_secs")
+    if raw is None and st.get("attackImpactClip") == clip:
+        raw = st.get("attackImpactRawSecs")
+    return raw
 
 
 def parse_trim(value):
@@ -403,12 +423,15 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
 
     items = dict(m["stages"].get("clips", {}).get("items") or {})
     st = m["stages"].setdefault("clips", {})
-    if st.get("attackImpactClip") == clip:
-        # the impact was measured on the clip this transfer replaces: drop it,
-        # so `clips impact` re-runs rather than a build re-deriving from it
-        for key in IMPACT_KEYS:
-            st.pop(key, None)
-        manifest.note(m, "clips transfer: %s re-transferred, attackImpact* dropped; re-run `clips impact --clip %s`"
+    # The impact measured on the clip this transfer replaces is dropped, so
+    # `clips impact` re-runs rather than a build re-deriving from it: the item
+    # below is written fresh (no impact_* keys), and the mirror goes with it when
+    # it names this clip. Every other clip keeps its own impact.
+    if raw_impact(m, clip) is not None:
+        if st.get("attackImpactClip") == clip:
+            for key in IMPACT_KEYS:
+                st.pop(key, None)
+        manifest.note(m, "clips transfer: %s re-transferred, its impact dropped; re-run `clips impact --clip %s`"
                       % (clip, clip))
     item = {"clip": clip, "source": source, "ref": candidate["ref"], "mode": candidate.get("mode_name", mode),
             "poses": str(out_path), "clip_seconds": clip_seconds, "scaled_seconds": scaled_seconds,
@@ -559,11 +582,11 @@ def build(m, clip, *, anims_dir=None, version=1, name=None, time_scale=None):
     items = dict(m["stages"]["clips"]["items"])
     item = items[clip]
     st = m["stages"]["clips"]
-    raw_impact = st.get("attackImpactRawSecs") if st.get("attackImpactClip") == clip else None
-    if raw_impact is not None and float(raw_impact) > float(item["clip_seconds"]) + 1e-6:
+    raw = raw_impact(m, clip)
+    if raw is not None and float(raw) > float(item["clip_seconds"]) + 1e-6:
         raise ValueError("clips.build(%s): the recorded impact (%.3f s authored) is past the clip's end (%.3f s): it "
                          "was measured on an earlier transfer. Re-run `clips impact --clip %s` first"
-                         % (clip, float(raw_impact), float(item["clip_seconds"]), clip))
+                         % (clip, float(raw), float(item["clip_seconds"]), clip))
     poses = json.loads(Path(item["poses"]).read_text())
     name = clip_title(m, clip, version, name)
     path = _resolve_anims_dir(anims_dir) / ("%s.rbxmx" % name)
@@ -593,25 +616,29 @@ def build(m, clip, *, anims_dir=None, version=1, name=None, time_scale=None):
     item.update(rbxmx=str(path), kfs_name=name, kfs_expected=expected,
                 time_scale=None if time_scale is None else float(time_scale))
     item["scaled_seconds"] = timing.clip_time(item, item["clip_seconds"], m["height_studs"])
+    if raw is not None:
+        # impact() ran before this build: re-derive this clip's delay at its new
+        # scale (a manifest measured before per-clip impacts gains the item keys)
+        item.update(impact_raw_secs=raw, impact_delay_secs=timing.clip_time(item, raw, m["height_studs"]))
     items[clip] = item
     names = sorted(set((m["stages"]["clips"].get("clip_names") or [])) | {name})
     manifest.set_stage(m, "clips", items=items, clip_names=names)
-    st = m["stages"]["clips"]
-    if st.get("attackImpactClip") == clip and st.get("attackImpactRawSecs") is not None:
-        # impact() ran before this build: re-derive the delay at the new scale
-        manifest.set_stage(m, "clips", attackImpactDelaySecs=timing.clip_time(
-            item, st["attackImpactRawSecs"], m["height_studs"]))
+    if raw is not None and m["stages"]["clips"].get("attackImpactClip") == clip:
+        manifest.set_stage(m, "clips", attackImpactDelaySecs=item["impact_delay_secs"])
     manifest.save(m)
     return path
 
 
 def impact(m, clip):
-    """Impact time for `clip` (scaled by timing), recorded as
-    `stages.clips.attackImpactDelaySecs`. impact_time()'s 0.0 return means "no
+    """Impact time for `clip` (scaled by timing), recorded on the clip's own
+    item as `impact_delay_secs` (with the authored `impact_raw_secs`), so every
+    clip keeps its own; `stages.clips.attackImpactDelaySecs` / `RawSecs` /
+    `Clip` mirror the clip measured last. impact_time()'s 0.0 return means "no
     lift found in this clip's trajectory" (impact.py's own docstring) -- never
     record that as a real delay, since the game would then fire damage on
     frame one; raise instead so the caller picks a different candidate."""
-    item = m["stages"]["clips"]["items"][clip]
+    items = dict(m["stages"]["clips"]["items"])
+    item = items[clip]
     poses = json.loads(Path(item["poses"]).read_text())
     t = impact_time(poses["traj"])
     if t <= 0.0:
@@ -623,7 +650,9 @@ def impact(m, clip):
     # height stretch); the raw time is kept so a later `clips build` at another
     # --time-scale re-derives it
     scaled = timing.clip_time(item, t, m["height_studs"])
-    manifest.set_stage(m, "clips", attackImpactDelaySecs=scaled, attackImpactRawSecs=t, attackImpactClip=clip)
+    items[clip] = dict(item, impact_raw_secs=t, impact_delay_secs=scaled)
+    manifest.set_stage(m, "clips", items=items, attackImpactDelaySecs=scaled, attackImpactRawSecs=t,
+                       attackImpactClip=clip)
     manifest.save(m)
     return scaled
 
@@ -1015,7 +1044,7 @@ def _on_item(x, step):
 
 def _declare_cli(x):
     declare(manifest.load(x.manifest), x.clip, loop=x.loop == "true", priority=x.priority,
-            description=x.description)
+            description=x.description, motion=x.motion)
 
 
 def _transfer_cli(x):
@@ -1105,6 +1134,9 @@ def register(sub):
     dc.add_argument("--priority", required=True, choices=sorted(kfs.PRIORITY, key=kfs.PRIORITY.get))
     dc.add_argument("--description", default=None,
                     help="the motion a text-to-motion model is asked for; `clips emit motion` requires it")
+    dc.add_argument("--motion", default="in_place", choices=eval_cmd.MOTIONS,
+                    help="how the clip moves, which picks its bench gates: in_place (default: foot contact and "
+                         "root travel), travel (a locomotion cycle: foot contact in a looser band) or fall (ends on the ground)")
     dc.set_defaults(func=_declare_cli)
 
     a = s.add_parser("transfer"); a.add_argument("--manifest", required=True)

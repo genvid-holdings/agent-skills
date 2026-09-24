@@ -147,14 +147,13 @@ SFX shares the shot's **`audio`** task lane with dialogue — claim it the same 
 
 Two axes, one concept, same as dialogue: you **claim and bind** on the `audio` lane (`task_type="audio"`, `link_type="shot_sfx"`), and you **price** it on `production_read` as `generation_type="sfx"`. If the SFX derives from a source clip, pass it in `input_media_ids` — it is recorded as a `source_audio` derivation link; text-only T2A has no input to pass.
 
-### Music is no longer bound to a shot
+### Music binds to an asset, not a shot
 
-`shot_music` no longer binds. Music is asset-anchored, not shot-anchored: OMC
+`shot_music` does not bind. Music is asset-anchored, not shot-anchored: OMC
 defines `NarrativeMusic featuresIn NarrativeScene` and has no shot-level music
-relationship, so a music cue now binds to a **music asset** the same way a
+relationship, so a music cue binds to a **music asset** the same way a
 character image binds to a cast-member asset — not to a shot's `audio` task
-lane. This is not because the feature went unused; it is because the anchor was
-wrong: a cue runs across shots, and a shot-scoped slot could not express that.
+lane. A cue runs across shots, and a shot-scoped slot cannot express that.
 SFX stays shot-anchored and keeps working exactly as above; the two are not
 symmetric on purpose.
 

@@ -245,8 +245,8 @@ so that no consumer has to infer which of the two it is holding.
 | Operator declaration | `article50.json` in the scanned directory | What a human states about the material; see `DECLARATION.md` |
 
 Three rules keep these readings anchored to what the file actually asserts.
-The first two were added because the loose form flagged ordinary content; the
-third because anchoring alone would have cost real detections:
+The first two keep ordinary content from being flagged; the third keeps real
+detections that anchoring alone would miss:
 
 - **The digital source type is the property's value, never a term found near
   it.** A caption, a keyword or a delivery note that mentions
@@ -486,10 +486,8 @@ The ones that matter most in practice:
   fix is one line. Keys are matched exactly, case included, and the scan will not
   guess: on a case-sensitive filesystem two files can differ only in capitals,
   and guessing would attach a deep-fake duty to the wrong asset. Worth treating
-  as high severity precisely because the failure it replaces was invisible — a
-  declared asset that no scan reads is a duty nobody is checking, and a mistyped
-  or renamed path used to drop out of the report silently and take a clean exit
-  code with it.
+  as high severity: a declared asset that no scan reads is a duty nobody is
+  checking.
 - `asset-unreadable`. The scan found the file and could not read it: permissions,
   a broken symlink, a symlink loop, or something that is not a regular file at
   all — including a symlink pointing at a directory, which a delivery folder can

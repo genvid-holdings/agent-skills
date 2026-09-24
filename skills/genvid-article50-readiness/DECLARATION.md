@@ -257,8 +257,7 @@ Length is bounded on the same surface and for the same reason. The gap list is
 a work list, so a value long enough to bury the findings underneath is cut where
 it is shown and marked with a trailing `...`: 200 characters for `title`, `operator`
 and `role`, which identify the report, and 1024 for an asset path, which is what
-you have to act on and may legitimately be deeply nested. A declared
-2,000,000-character title used to render as a 2 MB heading. The cut is to the
+you have to act on and may legitimately be deeply nested. The cut is to the
 gap list only — `scope.production` in the JSON report still carries the whole
 value, so nothing you declared is lost from the record.
 

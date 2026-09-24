@@ -88,15 +88,6 @@ def template_name(m):
 def path_for(m):
     return Path(m["out_dir"]) / "manifest.json"
 
-def ledger_path(m):
-    """Where this manifest's fal request ledger lives: one JSON file per
-    out_dir, shared by every stage that submits a paid vendor job through it.
-    A stage passes this to the transport it builds (`vendor.transport(ledger_path=...)`)
-    so `vendors/fal.py`'s submit()/wait() persist request ids to disk before a
-    dead driver can lose them, and records it on its own stage entry so a later
-    run (or a test) can see the ledger this manifest is backed by."""
-    return str(Path(m["out_dir"]) / "fal_requests.json")
-
 def save(m, path=None):
     p = Path(path) if path else path_for(m)
     p.parent.mkdir(parents=True, exist_ok=True)
