@@ -587,7 +587,24 @@ def build_kfs(m, clip, *, version=None, name=None):
     return studio.emit(m, "build_kfs", CLIP=clip, CLIP_NAME=built)
 
 
-def publish_clip(m, clip, *, version=None, name=None):
+def _resolve_creator_group(m, group):
+    """The group id `publish_clip`'s CreateAssetAsync uploads under: `group` when
+    given (validated, then recorded onto stages.clips.creator_group_id so every
+    later `publish-clip` on this manifest uses it without repeating it), else
+    whatever was already recorded there, else None -- the Studio user, the
+    unchanged default. Persists immediately (not deferred to the emit that
+    follows): a caller that only ever calls this to set the group for later
+    clips, without publishing this one, still gets it recorded."""
+    if group is not None:
+        group_id = studio.validate_group_id(group)
+        manifest.set_stage(m, "clips", creator_group_id=group_id)
+        manifest.save(m)
+        return group_id
+    recorded = (m["stages"].get("clips") or {}).get("creator_group_id")
+    return int(recorded) if recorded is not None else None
+
+
+def publish_clip(m, clip, *, version=None, name=None, group=None):
     """Emit the `publish_clip` Studio step: AssetService:CreateAssetAsync on the
     KeyframeSequence `build()` wrote and `build_kfs` verified, which returns a real asset id from the bridge's Edit
     context (witnessed 2026-09-04) and writes it onto the template as
@@ -597,12 +614,23 @@ def publish_clip(m, clip, *, version=None, name=None):
 
     Publishes the title `build()` recorded, and only once `studio ingest
     build_kfs` has verified that same title in Studio: publishing is the one
-    step that cannot be taken back."""
+    step that cannot be taken back.
+
+    `group` uploads the clip under that Roblox group instead of the Studio
+    user (a group-owned experience, or another user's experience of that
+    group, can load a group-owned animation without a manual permission
+    grant, which a user-owned one is refused). Pass it once and every later
+    `publish_clip` on this manifest reuses the recorded group without
+    repeating it; a malformed id is refused before anything is emitted or
+    recorded."""
     _item, title = _built_name(m, clip, "publish_clip", version, name)
+    group_id = _resolve_creator_group(m, group)
+    params = {"GROUP_ID": group_id} if group_id is not None else {}
     # studio.emit refuses a title build_kfs has not verified (studio.require_verified)
     return studio.emit(m, "publish_clip", CLIP=clip, CLIP_NAME=title,
                        DESCRIPTION="%s clip for %s, built from the transferred poses"
-                                   % (clip, manifest.template_name(m)))
+                                   % (clip, manifest.template_name(m)),
+                       **params)
 
 
 def bench(m, clip, *, speed=None, max_wait=25, at=(0, 300, 0)):
@@ -1161,7 +1189,7 @@ def _build_kfs_cli(x):
 
 
 def _publish_clip_cli(x):
-    publish_clip(_on_item(x, "publish-clip"), x.clip, version=x.version, name=x.name)
+    publish_clip(_on_item(x, "publish-clip"), x.clip, version=x.version, name=x.name, group=x.group)
     return 0
 
 
@@ -1288,6 +1316,9 @@ def register(sub):
                     help="optional: must match the title `clips build` recorded; default is its version")
     pc.add_argument("--name", default=None,
                     help="optional: with the recorded (or given) version, must match the title `clips build` recorded")
+    pc.add_argument("--group", default=None,
+                    help="upload under this Roblox group instead of the Studio user; recorded on the manifest "
+                         "so every later publish-clip reuses it without repeating it")
     pc.set_defaults(func=_publish_clip_cli)
 
     bc = s.add_parser("bench", help="emit the Play bench step for a PUBLISHED clip (hip drop, slide, head over sole)")

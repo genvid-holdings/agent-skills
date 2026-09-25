@@ -697,7 +697,7 @@ template is wired and parked (Stage order, above):
     runner clips build --manifest M --clip <key> [--anims-dir <dir>] [--time-scale <factor>]   # then let Rojo sync
     runner clips build-kfs --manifest M --clip <key>                          # Edit; read-only verify
     runner studio ingest build_kfs --manifest M --clip <key> <result>
-    runner clips publish-clip --manifest M --clip <key>                       # Edit
+    runner clips publish-clip --manifest M --clip <key> [--group <Roblox group id>]   # Edit
     runner studio ingest publish_clip --manifest M --clip <key> <result>
     runner clips bench --manifest M --clip <key> [--speed <x>] [--max-wait <s>]   # Play, Server
     runner studio ingest bench_clip --manifest M --clip <key> <result>
@@ -749,7 +749,14 @@ template is wired and parked (Stage order, above):
   beside the earlier ones in the anims directory. On build-kfs and
   publish-clip both are optional: without `--version` they take the recorded
   version, and a `--name` that gives another title is refused, naming the
-  recorded one. An explicit `--version` always wins.
+  recorded one. An explicit `--version` always wins. `--group <id>` uploads
+  the clip under that Roblox group instead of the Studio user: set it when
+  the experience the clip plays in is group-owned, or when several people
+  publish clips for the same experience, since a user-owned animation is
+  refused there without a manual permission grant. Pass it once and it is
+  recorded on the manifest, so every later `publish-clip` reuses it without
+  repeating it; the published item records which creator it was uploaded
+  under.
 - **`clips bench`** plays the published id on a clone in Play (below).
 - **`clips bind`** writes the platform-tier `register_media` and
   `finalize_media_registration` payloads for each `<key>=<id>` pair, titled

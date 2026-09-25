@@ -140,7 +140,14 @@ TEMPLATE_OF = {"treadmill_scaled": "treadmill"}
 RENDER_DEFAULTS = {"SPEED": 1, "SETTLED_BOTTOM": "", "MAX_WAIT": 25, "BENCH_X": 0, "BENCH_Y": 300, "BENCH_Z": 0,
                     "ANIM_ID": "",
                     "PARK_FOLDER": 'game:GetService("ServerStorage").Assets.Characters',
-                    "HIP_ATTR": "HipHeightStuds", "SOLE_ATTR": "SoleOffsetStuds"}
+                    "HIP_ATTR": "HipHeightStuds", "SOLE_ATTR": "SoleOffsetStuds",
+                    # publish_clip's CreateAssetAsync table (empty publishes as the Studio
+                    # user, the unchanged default) and the matching RUNNER_RESULT echo of
+                    # what it actually ran with; emit() fills all three in for a group
+                    # creator. The echo is what ingest() records the creator from -- never
+                    # the manifest's current creator_group_id, which a later publish on a
+                    # different clip can have already overwritten by ingest time.
+                    "CREATOR_FIELDS": "", "CREATOR_ID_EXPR": "nil", "CREATOR_TYPE_EXPR": '"User"'}
 
 # Ingest handlers contributed by `register_steps`, consulted before any of
 # ingest()'s own step branches.
@@ -318,11 +325,53 @@ def require_verified(m, clip, clip_name):
                          % (built, " (the last verify read %s)" % verified if verified else "", clip, clip))
 
 
+def validate_group_id(group_id):
+    """A Roblox group id `publish_clip` may upload under: digits only, positive.
+    Refuses anything else before it is recorded on the manifest or rendered into
+    Luau -- a malformed id would otherwise fail only when CreateAssetAsync runs
+    in Studio, as an opaque group-permission error days later."""
+    s = str(group_id).strip()
+    if not s.isdigit() or int(s) == 0:
+        raise ValueError("publish_clip: group id must be a positive integer (got %r)" % (group_id,))
+    return int(s)
+
+
+def creator_render(group_id):
+    """The three `publish_clip.luau` placeholders that describe who this asset
+    uploads under: CREATOR_FIELDS, the fragment spliced into the
+    CreateAssetAsync table (empty for the Studio user -- the unchanged default,
+    the table renders exactly as it did before this existed -- else
+    CreatorId/CreatorType = Enum.AssetCreatorType.Group for a validated group
+    id; witnessed 2026-09-25: that pair publishes a group-owned asset a
+    group-owned experience can load, where a user-owned copy of the same clip
+    is refused), and CREATOR_ID_EXPR/CREATOR_TYPE_EXPR, the matching Luau
+    expressions the RUNNER_RESULT echoes back.
+
+    That echo is deliberate, not decorative: `stages.clips.creator_group_id`
+    is a single manifest-wide setting a later `publish_clip` on a DIFFERENT
+    clip can already have overwritten by the time this one is ingested, so
+    `ingest()` records the creator from what this step's own result reports
+    it actually ran with, never from re-reading that manifest field."""
+    if group_id is None:
+        return {"CREATOR_FIELDS": "", "CREATOR_ID_EXPR": "nil", "CREATOR_TYPE_EXPR": '"User"'}
+    # Re-validated here even though clips._resolve_creator_group already validated
+    # a --group before recording it: `studio.emit(..., GROUP_ID=...)` is itself a
+    # direct entry point (`studio emit publish_clip --param GROUP_ID=...`), so this
+    # is the only validation a caller that skips clips.py ever gets.
+    gid = validate_group_id(group_id)
+    return {
+        "CREATOR_FIELDS": "\n\tCreatorId = %d,\n\tCreatorType = Enum.AssetCreatorType.Group," % gid,
+        "CREATOR_ID_EXPR": str(gid),
+        "CREATOR_TYPE_EXPR": '"Group"',
+    }
+
+
 def emit(m, step, **params):
     if step == "publish_clip":
         if "UNVERIFIED_OK" in params:
             raise ValueError(UNVERIFIED_OK_RETIRED)
         require_verified(m, params.get("CLIP"), str(params.get("CLIP_NAME")))
+        params.update(creator_render(params.pop("GROUP_ID", None)))
     template = manifest.template_name(m)
     # Manifest first, registered/pack default second: `studio.park_folder` is the
     # per-character override, so it has to beat a default register_steps merged in.
@@ -506,6 +555,19 @@ def ingest(m, step, result_path, lod=None, clip=None):
             assert asset_id, "publish_clip result lacks assetId: %r" % (data,)
             item["roblox_id"] = str(asset_id)
             item["anim_attribute"] = data.get("attribute")
+            # What the step ACTUALLY ran with, echoed back in the result --
+            # never re-read from stages.clips.creator_group_id: that is a
+            # single manifest-wide setting, and a later `publish_clip` on a
+            # DIFFERENT clip can already have overwritten it by the time this
+            # one is ingested (emit Walk --group 100, emit Idle --group 200,
+            # then ingest Walk: reading the manifest here would record Walk
+            # under 200, though it uploaded under 100).
+            if data.get("creatorType") == "Group":
+                creator_id = data.get("creatorId")
+                assert creator_id, "publish_clip result claims a Group creator with no creatorId: %r" % (data,)
+                item["creator"] = {"type": "Group", "id": int(creator_id)}
+            else:
+                item["creator"] = {"type": "User"}
             ids = dict((m["stages"].get("clips") or {}).get("roblox_ids") or {})
             ids[clip] = str(asset_id)
             manifest.set_stage(m, "clips", roblox_ids=ids)
