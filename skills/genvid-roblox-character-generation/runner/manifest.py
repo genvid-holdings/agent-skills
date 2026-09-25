@@ -37,11 +37,10 @@ def new(name, project_id, height_studs, vendor, out_dir, contract_name=None, ass
     manifest's chain writes is claimed FOR (genvid_bind.require_assignee /
     claim_assignment / ensure_claim). It has no default here beyond None: a
     manifest with no assignee is valid to build and inspect, it just cannot
-    pass any claim-emitting stage (plate.bind, biome.bind, biome.kit_bind,
-    biome.kit_model_bind, a per-title static-prop plate bind, and the ensure_claim-gated sites
+    pass any claim-emitting stage (plate.bind, a per-title static-prop plate
+    bind or its own asset-creating group, and the ensure_claim-gated sites
     plate.bind --only views, mesh.bind, rig.bind, rig.surface_prep, clips.bind,
-    biome.sky_bind, biome.kit_bind, biome.kit_model_bind, and plate.bind /
-    biome.bind on a pre-existing asset all refuse first)
+    and plate.bind on a pre-existing asset all refuse first)
     -- never silently 'me', which on a runner chain
     resolves to whichever agent holds the MCP session, not the reviewer, so
     the asset lands assigned to nobody and never enters in_progress.
@@ -52,7 +51,7 @@ def new(name, project_id, height_studs, vendor, out_dir, contract_name=None, ass
 
     `production_title` is the production's own title, and it is written verbatim
     into the description of every governed asset this chain creates
-    (plate.bind, biome.bind, biome.kit_bind). It belongs to the production, not
+    (plate.bind, and any per-title group that creates its own). It belongs to the production, not
     to this pack, so it has no default and no fallback here: see
     production_title() below, which refuses rather than guessing."""
     return {
@@ -150,7 +149,7 @@ def is_done(m, stage, allow_unregistered=False):
 
 def stages_for(m):
     """The gated stage order for this manifest: `m["stage_order"]` when the manifest
-    carries an explicit one (a `kind="location"` biome manifest's own chain),
+    carries an explicit one (a manifest whose chain is not the character chain),
     else STATIC_STAGES for a static (prop) manifest, else the full
     skinned-rig STAGES."""
     if "stage_order" in m:

@@ -1,6 +1,6 @@
 -- EditableMesh -> OBJ text dump: the orchestrator runs this in
 -- Studio, in the same live session, against a Cube-generated prop already parked by
--- park_prop.luau, to capture full geometry the way groundfit.luau/probe_feet.luau
+-- a per-title Studio step, to capture full geometry the way groundfit.luau/probe_feet.luau
 -- already read vertex positions off an EditableMesh (genvid-roblox-studio-ops:
 -- in-Studio MCP is the one access path that reveals full geometry -- there is no
 -- after-the-fact query for it once the session ends, so this has to run now).

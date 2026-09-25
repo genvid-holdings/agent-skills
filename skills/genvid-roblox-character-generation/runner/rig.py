@@ -461,10 +461,10 @@ def bind(m, run=subprocess.run, supersede=False):
     # part of the bake-off's rig binds that did not land. The CAUSE was not
     # isolated. The run note at the time read it as render_type "image" being
     # outside the media vocabulary, and that reading is an assumption the same
-    # morning's record argues against: the biome and HUD plates carrying
+    # morning's record argues against: other plates carrying
     # render_type "image" were bound through the MCP ingest_generated_media path
     # ($0.48 attested). Which says nothing certain about THIS path -- the
-    # runner's own plate and biome bind sites send "image" through
+    # runner's own plate bind sites send "image" through
     # genvid_bind.import_media (the CLI), and no such row is witnessed landing
     # or failing on that value either way. Two paths that may validate
     # differently is exactly why the cause is not isolated, so no claim about
@@ -475,7 +475,7 @@ def bind(m, run=subprocess.run, supersede=False):
     # governed generation, and it has no render type among the documented
     # generation modes (T2I, I2I, I23D, ...) that would describe it honestly.
     # The rig FBX and its GLB twin above are the governed rows, and the zoo
-    # capture (E25) is the visual record that is actually reviewed. The frames
+    # capture (`stages.wire.capture`) is the visual record that is actually reviewed. The frames
     # stay on the manifest as files so a reviewer can open them.
     manifest.set_stage(m, "rig", preview_media_ids=[], previews_unbound=list(st["previews"]))
     manifest.note(m, "rig bind: the %d workbench preview frame(s) are not bound -- a local "

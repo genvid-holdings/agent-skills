@@ -144,8 +144,8 @@ def require_request(m, stage, step, item=None, unrequested=None, group=None, emi
     recorded as a manifest note (and None returned). Also refuses when the recorded
     file is missing or holds another stage's or step's request (a manifest written
     while mesh and rig shared requests/model.json). `group` is the CLI group the
-    fix is run under, when it is not the stage's name (the biome group's steps
-    live on the plate, sky and kit stages), and `emit_args` any arguments that
+    fix is run under, when it is not the stage's name (a group whose steps
+    live on another group's stages), and `emit_args` any arguments that
     emit needs to name this item (such as `--prop 01`)."""
     name = request_name(step, item)
     path = ((m["stages"].get(stage) or {}).get("requests") or {}).get(name)
