@@ -18,11 +18,11 @@ first if you have not driven a Studio MCP session before. This skill does
 not repeat any of that; it teaches the craft on top of it.
 
 **Placeholders.** Examples below use neutral stand-ins for a character — a
-size word (`Small`, `Large`), a height in studs, an element — and `<Name>` for
-a slot a production's own naming fills. Code and attribute names in the
-examples (`animSpeedScale`, `HipHeightStuds` on a character template, a
-title's own spawn function) are one production's naming; the technique they
-illustrate is what this skill teaches.
+size word (`Small`, `Large`), a height in studs — and `<Name>` for
+a slot a production's own naming fills. `animSpeedScale` and `HipHeightStuds`
+on a character template are the runner's own manifest keys, not a production's
+naming; a title's own spawn function is, and the technique it illustrates is
+what this skill teaches.
 
 ---
 
@@ -73,8 +73,8 @@ bind on an approved task). The
 runner's own `genvid_bind.ensure_claim` is this check for every site that
 binds to an asset it did not just create (`plate bind --only front/all` on an
 existing asset, `plate bind --only views`, `mesh.bind`, `rig.bind`,
-`rig.surface_prep`, `clips.bind`, `biome bind` on an existing asset, `biome
-sky-bind`, `biome kit-bind`, `biome kit-model-bind`); do the same
+`rig.surface_prep`, `clips.bind`, and any per-title group that binds to an
+existing asset); do the same
 read-then-claim-or-reopen before any bind you run by hand against an asset you
 did not just create. Writing the reopen payload is not enough on its own: the
 reopen has to have *run* before the bind, or the bind still lands on the
@@ -181,14 +181,6 @@ provenance, not clutter. When you bind the replacement, put
 `supersedes_media_id: <old media_id>` in the new row's `params` so the
 lineage from candidate to candidate is on the graph, not only in the discard
 note.
-
-**Every generated kit/prop asset description carries the biome's colour
-references.** When an asset belongs to a biome (a kit item, a prop, any
-set-dressing/greenery asset), put that biome's palette hex list in the
-asset's own description — not only in the one-off generation prompt — so a
-later re-roll built from the asset (rather than from the original prompt) is
-still conditioned on the right palette. Treat the hex list as a required
-field of the description, not decoration.
 
 ---
 
@@ -516,47 +508,30 @@ current media, in order of what they cost to call:
 `runner/cli.py`, under `skills/genvid-roblox-character-generation/runner/`, is a
 stdlib-only Python package invoked as `python3 runner/cli.py <group> <cmd> ...`.
 Each group — `init`, `plate`, `mesh`, `rig`, `surface`, `studio`, `clips`,
-`eval`, `record`, `biome` — is its own module exposing `register(subparsers)`; `cli.py` imports
+`eval`, `record` — is its own module exposing `register(subparsers)`; `cli.py` imports
 each lazily and skips one that fails to import rather than breaking the rest.
 
 **Nothing bound to one title lives here.** A title's own chains, its Studio
 steps, its attribute names, its world design and its eval thresholds belong in a
 per-title skill
 that DEPENDS on this pack; the dependency is one-way and this pack never imports
-one. Three manifest fields carry the production's own identity into the work this
-pack does, and **none of them has a default**: `project_id`
-(`runner init --project`, `runner biome init --project`),
-`production_title` (`--production-title` on both), the string every asset
-description this chain creates is built from — `plate bind --create-asset`,
-`biome bind --create-asset` and `biome kit-bind`'s prop batch all read it
-through `manifest.production_title()`, which raises rather than guessing — and
-`design`, the title's own **design document**:
+one. Two manifest fields carry the production's own identity into the work this
+pack does, and **neither has a default**: `project_id`
+(`runner init --project`) and
+`production_title` (`--production-title`), the string every asset
+description this chain creates is built from — `plate bind --create-asset`
+and any asset-creating site a per-title group adds read it
+through `manifest.production_title()`, which raises rather than guessing.
+A title's own world design (its palettes, HUD tokens, prop kit and design Luau
+modules) is a per-title skill's own document, never general technique, so
+none of it is a constant here. What stays here as generic technique, because a
+per-title chain can reach for it without vendoring it: `runner/luau/sky.luau`
+(six cubemap faces plus a lighting style), `runner/blender/equirect_to_cube.py`
+(the Roblox slot remap for a cubemap's six faces) and
+`runner/blender/split_sheet.py` (an equal-tile grid crop of a sheet image into
+per-tile PNGs).
 
-```json
-"design": {
-  "palettes":     {"<biome name>": ["#RRGGBB", "..."]},
-  "hud_tokens":   {"<role>": "#RRGGBB"},
-  "kit_props":    ["<prop name>"],
-  "style":        "<prompt fragment naming the art direction>",
-  "hud_style":    "<prompt fragment describing the HUD's own layout>",
-  "luau_modules": {"design_tokens": "<module name>", "lighting": "<module name>"}
-}
-```
-
-Which biomes a title has and what colour each one is, what its HUD shows and in
-what token hexes, which props its set-dressing kit contains, the words that name
-its art direction, and the names of its own design Luau modules are all design
-decisions owned by that title — never general technique, so none of them is a
-constant here. `runner/design.py` is the only reader: `design.load(m)` and its
-typed accessors (`palette`, `biome_names`, `hud_tokens`, `kit_props`, `style`,
-`hud_style`, `luau_module`) **raise naming the missing key** rather than
-substituting anything, because a placeholder would silently condition a paid
-generation and the governed `params` row that records it. `biome init --biome`
-therefore has no fixed choice list: the names come from the document.
-**The per-title skill stamps it**, next to the park folder and the title, and
-`biome init --design <file.json>` is the other way in for a caller driving this
-pack directly — optional there and only there, so the stamping seam still works.
-A per-title skill stamps all three. `studio.register_steps(template_dir, stage_of=, render_defaults=,
+A per-title skill stamps both. `studio.register_steps(template_dir, stage_of=, render_defaults=,
 ingest_handlers=)` is the seam: the directory is searched for `<step>.luau`
 before this package's own, `stage_of` puts the new steps in `STEPS` and names the
 manifest stage each ingest lands on, `render_defaults` merge into
@@ -602,8 +577,9 @@ root scale from `stages.wire.result.scale`, and `studio ingest build_kfs`
 refuses a template that is not under the park folder. The end-to-end list at
 the end of this section gives the full order. A static model with no Humanoid and no rig
 skips straight to `plate -> mesh -> wire -> record`: there is no rig, ground-fit,
-or clip stage for something that never gets a skeleton. A biome/location plate or
-the HUD viz-dev asset carries its own shorter stage order on the manifest itself.
+or clip stage for something that never gets a skeleton. A manifest whose chain
+is not the character chain can carry its own shorter stage order (`stage_order`)
+on the manifest itself.
 A variant that is the same rig at a different scale under a second template name
 re-runs only the scale-dependent tail (`scale`, `dump_rest`, `groundfit`, `wire`,
 `park`) against a second manifest, copying the winner's plate/mesh/rig stages
@@ -635,11 +611,6 @@ provider, model, params and cost the agent reports, and binds it. The pairs:
 | mesh | `mesh emit model` | `mesh ingest model <result>` (GLB preferred; binary FBX or OBJ converted), which also preps and binds | image-to-3D |
 | rig | `rig emit model [--clip LABEL:DESCRIPTION ...]` | `rig ingest model --rig <result> [--clip LABEL=FILE ...] [--derived-from mesh\|plate]`, which also converts to R15 and binds | rigging |
 | clips | `clips emit motion --clip <key> ...` | `clips ingest motion --clip <key> --mode mixamo\|r15\|rename\|ual <result>` | text-to-motion |
-| biome plate | `biome emit plates` | `biome ingest plates --item 1\|2\|3 [--asset-id ... \| --create-asset] <result>` | text-to-image |
-| HUD plate | `biome emit hud-plates` | `biome ingest hud-plates --item pill\|chunky\|minimal [--asset-id ... \| --create-asset] <result>` | text-to-image |
-| sky | `biome emit sky` | `biome ingest sky <result>`, which splits the six cube faces and binds all seven | image-to-panorama |
-| kit sheet | `biome emit kit-sheet [--props ...] [--rows ...] [--cols ...]` | `biome ingest kit-sheet <result>`, which splits the tiles, binds them and creates one asset per prop | image-to-image, the approved plate as style reference |
-| kit model | `biome emit kit-model --prop <key> [--triangles-max ...]` | `biome ingest kit-model --prop <key> <result>`, or `--roblox-asset-id <id> [--mesh-id ...] [--texture-id ...]` for a model that exists only in Roblox | image-to-3D |
 
 `rig emit model --clip` asks the rigging model for library motions bundled with
 the rig, one per label; `rig ingest model --clip LABEL=FILE` records each as
@@ -868,9 +839,9 @@ in the game:
    DOES apply on those rigs.
 6. *Cadence follows the square root of height.* `timing.scale_time` stretches
    a clip by `sqrt(height / 8)`, so a clip authored at height H plays on a
-   rig of height h at speed `sqrt(H / h)`; the game's `deathAnimSpeed` dial
-   is exactly that number when one rig borrows another's clip (a 50-stud rig
-   plays a 95-stud rig's death at 1.378 = sqrt(95 / 50)). `kfs.write` applies
+   rig of height h at speed `sqrt(H / h)`. A rig that borrows another rig's
+   clip plays it at that speed (a 20-stud rig plays a 50-stud rig's clip at
+   sqrt(50 / 20) = 1.58). `kfs.write` applies
    the same factor to every keyframe time (`1 / timing.cadence(height)`: 1.58
    at 20 studs, 2.09 at 35, 2.5 at 50, 3.45 at 95). A clip authored on the rig
    itself, at the cadence it should play at, is built with
@@ -994,7 +965,7 @@ step reports `hipsDrop`, `hipsBack`, `headEndAboveSole` (sole plane =
 `HIP_ATTR` + half the root height below the root centre), `heldAtEnd`,
 and files the timeline. A death clip passes when the hips drop by about the
 hip height, the head ends above the sole plane, and the end pose holds. Pass
-`--speed` for a walk (animSpeedScale) or a borrowed clip (law 6). `frozen` is
+`--speed` for a walk (`stages.clips.animSpeedScale`, from `clips speed-scale`) or a borrowed clip (law 6). `frozen` is
 one of the fields that say whether those numbers mean anything. The step applies
 the game's own end-pose hold (`AdjustSpeed(0)` just before the clip ends), and
 schedules it by TRACK time: a Heartbeat watcher freezes the track once
@@ -1075,12 +1046,13 @@ ingests through its own handler, so its attribute names, its remotes and the
 manifest keys it writes stay out of a pack that is mirrored publicly.
 
 **Eval matrix.** `runner eval` prints and writes the eval-matrix table, rows
-E1-E32, reading only files on disk plus the manifest — it never imports another
-stage module, so it runs standalone regardless of which stages exist yet. A gate
-row with no evidence on disk reports FAIL, never PASS and never silently skipped;
-a non-gate row with no evidence reports PENDING; rows that measure a Studio
-artifact the runner cannot itself produce (E13/E14 far-LOD grounding, E24 the walk
-probe, E25 the aim-down-at-players capture) read whatever `studio.py`'s
+E1-E32 (E25 retired: no stage ever wrote its input, so it could only ever
+report PENDING), reading only files on disk plus the manifest — it never
+imports another stage module, so it runs standalone regardless of which stages
+exist yet. A gate row with no evidence on disk reports FAIL, never PASS and
+never silently skipped; a non-gate row with no evidence reports PENDING; rows
+that measure a Studio artifact the runner cannot itself produce (E13/E14
+far-LOD grounding, E24 the walk probe) read whatever `studio.py`'s
 probe/capture ingests wrote into `<out>/eval.json`, never a value this module
 computes. Every row scores a stage this pack owns, which is why the matrix lives
 here rather than in a per-title skill; what IS per-title is the calibration of a

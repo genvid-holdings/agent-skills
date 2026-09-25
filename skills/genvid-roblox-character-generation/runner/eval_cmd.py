@@ -1,5 +1,5 @@
 """`runner eval` -- prints and writes the eval-matrix table (plan
-docs/superpowers/plans/2026-09-02-rdc-week-runner.md, "Eval matrix" section, rows E1-E29; E30-E32 are the bench gates).
+docs/superpowers/plans/2026-09-02-rdc-week-runner.md, "Eval matrix" section, rows E1-E29 (E25 retired); E30-E32 are the bench gates).
 
 Reads only files on disk plus the manifest passed in; never imports another stage
 module (mesh.py, rig.py, groundfit.py, clips.py, studio.py, wire.luau results are
@@ -525,10 +525,6 @@ def _row_E24(ctx):
     return _dig(ctx.eval_prior, "wire.walk_probe")
 
 
-def _row_E25(ctx):
-    return _dig(ctx.m, "stages.wire.attack_capture_media_id")
-
-
 def _row_E26(ctx):
     return _dig(ctx.m, "stages.record.result")
 
@@ -941,8 +937,8 @@ def build_rows(ctx):
     add("E23", "wire", "recipe applied", "auto", True, "stages.wire.result", _row_E23, _wire_all_true, "all true")
     add("E24", "wire", "spawns and walks", "auto", True, "eval.wire.walk_probe", _row_E24, _walk_probe_check,
         "travel >= 25, falls == 0, tilt <= 5deg")
-    add("E25", "wire", "head looks down at players", "capture", False, "cast_member_image params.stage=attack-capture",
-        _row_E25, _truthy, "head pitch >= 20 deg at impact")
+    # E25 is retired (no stage ever wrote its input, stages.wire.attack_capture_media_id;
+    # it could only ever report PENDING). The id is left unused; E26-E32 keep their numbers.
     add("E26", "record", "conformance", "auto", True, "stages.record.result", _row_E26, _eq("conformant"), "conformant")
     # gate is False, not the usual True, exactly while a clip is unregistered
     # add()'s only route to PEND for an "auto" row is value is None

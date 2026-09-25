@@ -87,7 +87,7 @@ def _shorthand(body):
     return ", ".join(parts)
 
 def create_assets(project_id, items, run=subprocess.run):
-    """Batch create-assets -- every kit prop for a biome in one request. `items`
+    """Batch create-assets -- several assets in one request. `items`
     is a list of {"name", "asset_type", "description"}; one `genvid create-assets` call
     for the whole list. Returns the asset_ids in the SAME ORDER as `items` -- the
     openapi CreateAssetsBatchResponse schema documents "assets: The created assets,
@@ -394,8 +394,8 @@ def mcp_payload(tool, out_dir, **args):
 
 def require_assignee(m):
     """Refuse before any governed write when the manifest carries no explicit
-    reviewer. Every asset-CREATING caller (plate.bind, biome.bind,
-    biome.kit_bind, a per-title skill's static-prop plate bind) calls this
+    reviewer. Every asset-CREATING caller (plate.bind, a per-title skill's
+    static-prop plate bind or its own asset-creating group) calls this
     FIRST, ahead of any `genvid create-assets` / `import-generated-media`
     subprocess call, so a missing assignee never leaves a real asset created
     with nothing claimed: an asset created under a missing assignee is
@@ -403,8 +403,7 @@ def require_assignee(m):
     `ensure_claim` (below) also calls this, for every site that binds to an
     asset it did not just create (plate.bind --only front/all on an existing
     asset, plate.bind --only views, mesh.bind, rig.bind, rig.surface_prep,
-    clips.bind, biome.bind on an existing asset, biome.sky_bind,
-    biome.kit_bind, biome.kit_model_bind).
+    clips.bind, and any per-title group that binds to an existing asset).
 
     Never defaults to 'me': genvid-agent-generation's own Step 0 lets an agent
     omit `assigned_to_email` (or pass "me") to self-assign, which is correct
@@ -458,9 +457,8 @@ def ensure_claim(m, asset_id, site):
     bind --only front/all` on an existing asset, `plate bind --only views`,
     `mesh.bind`, `rig.bind` (whose site `rig.bind_clips` deliberately reuses:
     the bundled clips bind to the same asset in the same ingest), `rig.surface_prep`,
-    `clips.bind`, `clips.ingest_motion` (site `clips.motion`), `biome.bind` on
-    an existing asset, `biome.sky_bind`, `biome.kit_bind`,
-    `biome.kit_model_bind`) the same way `require_assignee` gates every
+    `clips.bind`, `clips.ingest_motion` (site `clips.motion`), and any per-title
+    group that binds to an existing asset) the same way `require_assignee` gates every
     asset-CREATING site -- called BEFORE that site's first governed write,
     never after. `require_assignee`'s and `manifest.new`'s own caller lists
     name the asset-creating gates; the sites above are the gates added by this

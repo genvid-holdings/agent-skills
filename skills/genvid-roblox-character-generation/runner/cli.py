@@ -11,7 +11,7 @@ import argparse, importlib, os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-GROUPS = ("init", "plate", "mesh", "rig", "studio", "clips", "eval", "record", "biome")
+GROUPS = ("init", "plate", "mesh", "rig", "studio", "clips", "eval", "record")
 # Group name -> module name, for groups whose module can't share the group's name
 # (a module literally named eval.py would shadow the eval() builtin on import).
 MODULE_FOR = {"init": "manifest_cli", "eval": "eval_cmd"}

@@ -1,6 +1,6 @@
-"""Kit sheet PNG -> equal-tile grid crop -> per-prop PNGs.
+"""Sheet PNG -> equal-tile grid crop -> per-tile PNGs.
 
-Run: blender --background --python split_sheet.py -- kit_sheet.png out/kit 4 3
+Run: blender --background --python split_sheet.py -- sheet.png out/tiles 4 3
 Writes out_dir/prop_01.png .. prop_NN.png in row-major order (row 0 left-to-right,
 then row 1, ...; NN = rows*cols, zero-padded to two digits). Prints exactly one line:
 RUNNER_RESULT {"tiles": {"01": path, ...}, "mean_rgb": {"01": [r, g, b], ...}}
