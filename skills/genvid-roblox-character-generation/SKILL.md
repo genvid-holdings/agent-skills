@@ -715,6 +715,9 @@ template is wired and parked (Stage order, above):
   `--root-y ground` is the opt-in ground lock, which skins
   `stages.rig.artifact_glb` unless `--rig-mesh` names another glb; `--trim
   START:END` keeps one range of the source clip, in seconds of authored time.
+  Re-transferring a clip that was built, benched, published or bound keeps
+  the item it replaces on `stages.clips.superseded.<key>` and notes its
+  title, Roblox id and Genvid media id on the manifest.
 - **`clips build`** writes the KeyframeSequence `<Name><Key>_v<N>.rbxmx` into
   the directory the title's Rojo project maps into
   `ServerStorage.Assets.Anims`, where the Studio steps read it: `--anims-dir`,
@@ -736,8 +739,17 @@ template is wired and parked (Stage order, above):
   title. `studio emit publish_clip` is gated the same way and refuses a CLIP
   that is not on `stages.clips.items`, with no bypass. `--version` / `--name`
   on `clips build` set the recorded title (`--name` when the Studio template's
-  own name may not appear in a published title); on build-kfs and
-  publish-clip they are optional and must match it.
+  own name may not appear in a published title). Without `--version`, `clips
+  build` takes the next unused version: one past the highest this clip has
+  been built at, read from the `kfs_name` of its current item, of each prior
+  item on `stages.clips.superseded.<key>` (a list of item records; only their
+  `kfs_name` counts) and of its titles on `stages.clips.clip_names`, so it
+  never rewrites a title it built. A clip published with no recorded title
+  needs an explicit `--version`. Each such build writes a new `.rbxmx`
+  beside the earlier ones in the anims directory. On build-kfs and
+  publish-clip both are optional: without `--version` they take the recorded
+  version, and a `--name` that gives another title is refused, naming the
+  recorded one. An explicit `--version` always wins.
 - **`clips bench`** plays the published id on a clone in Play (below).
 - **`clips bind`** writes the platform-tier `register_media` and
   `finalize_media_registration` payloads for each `<key>=<id>` pair, titled
@@ -926,8 +938,9 @@ file (stated in `generation.params`), `duration_seconds` = the scaled
 length, and NO `target`/`stage` (the keyframesequence stage is refused).
 `clips bind` writes exactly this, registering each clip under the title
 `clips build` recorded for it (so clips at different versions bind in one
-call; a `--version`/`--name` that gives another title is refused, and a
-clip with no build record needs an explicit `--version`), and cites the clip's source row in
+call; without `--version` it takes each clip's recorded version, a
+`--version`/`--name` that gives another title is refused, and a clip with no
+build record needs an explicit `--version`), and cites the clip's source row in
 `input_media_ids`: a generated clip's motion row, a rig-bundled clip's own row,
 nothing for an archive clip. An item from any other source (a title's own
 transfer, which writes the item itself) must carry `source_media_id`, the
@@ -1086,7 +1099,10 @@ media-type hint only (no file of that name exists; the original is the
 platform id); and `target="roblox"` / `stage="roblox/keyframesequence"` is not
 a known destination and stage, so a clip finalizes with no target/stage.
 Supersession is carried in the generation params (`supersedes_media_id`) and
-in `input_media_ids`, never by deleting the earlier row. `record.run()` refuses an unregistered clip
+in `input_media_ids`, never by deleting the earlier row. A clip's params also
+carry its transfer options (`root_y`, `root_ref`, `g`, `g_from`, `trim`,
+`time_scale`, `k`), and, when `stages.clips.superseded.<key>` holds a
+registered item, `supersedes_media_id` names that item's Genvid media id. `record.run()` refuses an unregistered clip
 unless run with `--allow-unregistered`, and eval row E27 reads PEND, never
 PASS, while any clip is still only "payload written."
 

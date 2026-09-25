@@ -159,4 +159,16 @@ When the boundary ships a breaking change the minor version increments, `boundar
 
 Every version bump to `pack.json` must be mirrored in `.claude-plugin/marketplace.json`'s self-referencing plugin entry (`source: "./"`): `scripts/validate_pack.py` enforces this in CI, but if you fork the pack and drop that check, know that a stale marketplace version makes `claude plugin update` silently report "already at the latest version".
 
+A release that deletes files lists them in `pack.json` under `removals`, one entry per version, each path relative to the pack root:
+
+```json
+{
+  "removals": [
+    {"version": "0.10.18", "paths": ["skills/<skill>/<file>"]}
+  ]
+}
+```
+
+If you update a copy of the pack by copying the new release over it, delete every path listed there too: copying never removes a file. Each path names one file, never a directory or a glob, and no listed path exists in the pack. To ship a listed file again, remove it from `removals`.
+
 The range is checked against a real boundary, not just asserted here. `scripts/boundary_client.py` is a stdlib-only MCP client that reads the contract version off the `initialize` handshake and the tool surface off `tools/list`. Gate 2 in `scripts/smoke_test.py` loads `boundary_compat` from `pack.json` and, when `BOUNDARY_URL` points at a boundary, fails on a missing tool, a drifted parameter, or a contract version outside the declared range. With no boundary configured it reports `SKIPPED` and exits zero, which is neither a pass nor a failure: there is nothing to validate against.

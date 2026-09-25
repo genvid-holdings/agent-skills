@@ -263,6 +263,13 @@ ITEM_IMPACT_KEYS = ("impact_delay_secs", "impact_raw_secs")
 # The stages.clips mirror of the clip `impact()` measured last (attackImpactClip),
 # kept for the readers that predate per-clip impacts.
 IMPACT_KEYS = ("attackImpactDelaySecs", "attackImpactRawSecs", "attackImpactClip")
+# An item carrying any of these has been built, benched, published or bound: a
+# re-transfer keeps it on stages.clips.superseded.<clip> rather than drop it.
+PUBLISHED_ITEM_KEYS = ("roblox_id", "kfs_name", "registration", "bench")
+# The item's transfer options (and the build's time scale) `bind()` records in
+# the generation params, so two versions of a clip are told apart by more than
+# their titles.
+TRANSFER_OPTION_KEYS = ("root_y", "root_ref", "g", "g_from", "trim", "time_scale", "k")
 
 
 def raw_impact(m, clip):
@@ -323,7 +330,13 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
     `scaled_seconds` are the trimmed length; `root_y="ground"` locks the
     vertical root motion so the rig's lowest skinned vertex stays on the ground
     every frame (the horizontal still follows `root_ref`), skinning `rig_mesh`
-    (default `stages.rig.artifact_glb`, the rig's glb twin) with the transfer."""
+    (default `stages.rig.artifact_glb`, the rig's glb twin) with the transfer.
+
+    The item a re-transfer replaces is appended to
+    `stages.clips.superseded[<clip>]` when it carries any of
+    `PUBLISHED_ITEM_KEYS` (its title, Roblox id, bench result or
+    registration), and a manifest note names the title, the Roblox id and the
+    Genvid media id it held: nothing published is dropped."""
     manifest.require_stage(m, "clips")
     known_key(m, clip)
     if g and g_from:
@@ -442,6 +455,16 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
             "root_y": poses.get("root_y", None if no_root else (root_y or "hips")), "k": poses.get("k"),
             "ground": poses.get("ground"),
             "trim": list(trim_range) if trim_range else None}
+    prev = items.get(clip)
+    if prev and any(prev.get(k) for k in PUBLISHED_ITEM_KEYS):
+        # the replaced item may be a published, registered clip: keep its record
+        history = dict(st.get("superseded") or {})
+        history[clip] = list(history.get(clip) or []) + [prev]
+        manifest.set_stage(m, "clips", superseded=history)
+        manifest.note(m, "clips transfer: %s re-transferred; the item it replaces (title %s, rbxassetid %s, Genvid "
+                         "media %s) is kept on stages.clips.superseded.%s"
+                      % (clip, prev.get("kfs_name"), prev.get("roblox_id"),
+                         (prev.get("registration") or {}).get("media_id"), clip))
     items[clip] = item
     manifest.set_stage(m, "clips", items=items)
     manifest.save(m)
@@ -463,6 +486,51 @@ def clip_title(m, clip, version=1, name=None):
     a catalog key is already capitalized, and a title's declared key may be
     lowercase (`clips declare`)."""
     return kfs.clip_name(name or m["name"], clip[:1].upper() + clip[1:], version)
+
+
+def _version_arg(text):
+    """argparse type for --version: a published title's version is 1 or more."""
+    v = int(text)
+    if v < 1:
+        raise argparse.ArgumentTypeError("--version must be 1 or more (got %s)" % text)
+    return v
+
+
+def _title_version(title):
+    """The version a published clip title carries (`<Name><Clip>_v<N>`), or None."""
+    hit = re.search(r"_v(\d+)$", title or "")
+    return int(hit.group(1)) if hit else None
+
+
+def next_version(m, clip, name=None):
+    """The version `clips build` takes when no --version is given: one past the
+    highest version this clip has been built at, read from the `kfs_name` of
+    its current item and of every item archived on
+    `stages.clips.superseded.<clip>`, and from `stages.clips.clip_names` for
+    this clip's title. 1 only when the clip has never been built, so a build
+    never rewrites a title that may already be published. A clip published
+    with no recorded title (a `roblox_id` or `registration` on a row, no
+    `kfs_name` anywhere) is refused: its version is unknown, so the caller
+    passes --version."""
+    st = m["stages"].get("clips") or {}
+    rows = [(st.get("items") or {}).get(clip) or {}]
+    old = (st.get("superseded") or {}).get(clip) or []
+    rows += [old] if isinstance(old, dict) else list(old)
+    seen = [_title_version(r.get("kfs_name")) for r in rows if isinstance(r, dict)]
+    stem = clip_title(m, clip, 1, name)[:-len("_v1")]
+    seen += [_title_version(t) for t in st.get("clip_names") or [] if re.fullmatch(re.escape(stem) + r"_v\d+", t)]
+    seen = [v for v in seen if v]
+    if not seen and any(isinstance(r, dict) and (r.get("roblox_id") or r.get("registration")) for r in rows):
+        raise ValueError("clips.build(%s): the clip was published with no recorded title, so its version is "
+                         "unknown; pass --version one past the published one" % clip)
+    return max(seen, default=0) + 1
+
+
+def _asked_title(m, clip, built, version, name):
+    """The title a step's --version/--name ask for, beside the recorded `built`:
+    an explicit --version wins, and --name alone keeps the recorded version and
+    replaces only the prefix."""
+    return clip_title(m, clip, version if version is not None else (_title_version(built) or 1), name)
 
 
 # `clips build-kfs --port` served <out_dir> to a Studio step that fetched the
@@ -487,7 +555,7 @@ def _built_name(m, clip, step, version=None, name=None):
     if not built or not item.get("kfs_expected"):
         raise ValueError(_not_built(clip))
     if version is not None or name is not None:
-        title = clip_title(m, clip, version or 1, name)
+        title = _asked_title(m, clip, built, version, name)
         if title != built:
             raise ValueError("clips.%s(%s): --version/--name give %s, but `clips build` last wrote %s; "
                              "re-run `clips build` with the same --version/--name, or drop them here"
@@ -557,12 +625,13 @@ def bench(m, clip, *, speed=None, max_wait=25, at=(0, 300, 0)):
                        BENCH_X=at[0], BENCH_Y=at[1], BENCH_Z=at[2])
 
 
-def build(m, clip, *, anims_dir=None, version=1, name=None, time_scale=None):
+def build(m, clip, *, anims_dir=None, version=None, name=None, time_scale=None):
     """Write the clip's KeyframeSequence .rbxmx (name via `clip_title`) into
     `anims_dir` -- the title's own Rojo-mapped animation directory, defaulting to
     $GAME_ANIMS_DIR, which is required (see `anims_dir()`) -- and record it on the
     clip's item and on `stages.clips.clip_names` (E22's naming-law gate reads
-    this list).
+    this list). With no `version` the clip takes the next unused one
+    (`next_version`); an explicit `version` is used as given.
 
     This is how a clip reaches Studio: Rojo syncs the file into
     ServerStorage/Assets/Anims, `build_kfs` verifies it there against
@@ -588,7 +657,7 @@ def build(m, clip, *, anims_dir=None, version=1, name=None, time_scale=None):
                          "was measured on an earlier transfer. Re-run `clips impact --clip %s` first"
                          % (clip, float(raw), float(item["clip_seconds"]), clip))
     poses = json.loads(Path(item["poses"]).read_text())
-    name = clip_title(m, clip, version, name)
+    name = clip_title(m, clip, next_version(m, clip, name) if version is None else version, name)
     path = _resolve_anims_dir(anims_dir) / ("%s.rbxmx" % name)
     wire = (m["stages"].get("wire") or {}).get("result") or {}
     # the Studio scale step's factor (stages.wire.result.scale, from wire.luau's
@@ -859,12 +928,24 @@ def _bind_title(m, clip, item, version, name):
                              "published title" % (clip, clip))
         return clip_title(m, clip, version, name)
     if version is not None or name is not None:
-        title = clip_title(m, clip, version or 1, name)
+        title = _asked_title(m, clip, built, version, name)
         if title != built:
             raise ValueError("clips.bind(%s): --version/--name give %s, but `clips build` recorded %s, the title "
                              "publish_clip published; drop them, or pass the ones that give %s"
                              % (clip, title, built, built))
     return built
+
+
+def _superseded_media_id(m, clip):
+    """The Genvid media id of the newest item on `stages.clips.superseded[clip]`
+    that was registered, or None: the row a bind of the re-transferred clip
+    supersedes."""
+    history = ((m["stages"].get("clips") or {}).get("superseded") or {}).get(clip) or []
+    for prev in reversed(history):
+        media_id = (prev.get("registration") or {}).get("media_id")
+        if media_id:
+            return str(media_id)
+    return None
 
 
 def bind(m, ids, version=None, name=None):
@@ -906,7 +987,10 @@ def bind(m, ids, version=None, name=None):
       rejection on the second clip's finalize), and `generation={"provider":
       "runner", "model": "world-space-transfer", "prompt": <clip source
       line>, "params": {...}}` (a JSON OBJECT, per the schema, not a
-      string). `target="roblox"`/`stage="roblox/keyframesequence"` mirror
+      string). The params carry the item's transfer options
+      (`TRANSFER_OPTION_KEYS`) and, when `stages.clips.superseded[clip]`
+      holds a registered item, `supersedes_media_id` naming its Genvid media
+      id (the newest such item). `target="roblox"`/`stage="roblox/keyframesequence"` mirror
       what makes a row conformance-checkable (SKILL.md 5.1); the exact
       `"roblox/keyframesequence"` stage string is UNVERIFIED against a
       published target_vocabulary (the schema says to check one, and no such
@@ -974,8 +1058,12 @@ def bind(m, ids, version=None, name=None):
                                 "loop": item["loop"], "priority": item["priority"],
                                 "size_bytes_is": "the transfer's poses JSON the KeyframeSequence was built from; "
                                                  "the published sequence has no file"}}
+        generation["params"].update({k: item.get(k) for k in TRANSFER_OPTION_KEYS})
         if source_record:
             generation["params"]["source_record"] = source_record
+        superseded_id = _superseded_media_id(m, clip)
+        if superseded_id:
+            generation["params"]["supersedes_media_id"] = superseded_id
         identifiers = [{"identifier_scope": "roblox.com", "identifier_value": "asset_id:%s" % roblox_id}]
         finalize_path = genvid_bind.mcp_payload("finalize_media_registration", m["out_dir"],
             project_id=m["project_id"], media_id=_pending_media_id(register_path),
@@ -1174,7 +1262,9 @@ def register(sub):
     b.add_argument("--time-scale", type=float, default=None,
                    help="multiply the authored keyframe times by this; default is the sqrt-cadence stretch for "
                         "the character's height, 1 keeps the authored cadence (a clip authored on this rig)")
-    b.add_argument("--version", type=int, default=1)
+    b.add_argument("--version", type=_version_arg, default=None,
+                   help="the published title's version; default is one past the highest this clip has been built at "
+                        "(1 for a clip never built)")
     b.add_argument("--name", default=None,
                    help="character prefix for the published clip title, when the Studio template's "
                         "own name is not one a published asset title may carry (no source brand)")
@@ -1184,18 +1274,20 @@ def register(sub):
                                         "wrote has synced into Studio")
     bk.add_argument("--manifest", required=True)
     bk.add_argument("--clip", required=True, help=CLIP_HELP)
-    bk.add_argument("--version", type=int, default=None,
-                    help="optional: must match the title `clips build` recorded")
-    bk.add_argument("--name", default=None, help="optional: must match the title `clips build` recorded")
+    bk.add_argument("--version", type=_version_arg, default=None,
+                    help="optional: must match the title `clips build` recorded; default is its version")
+    bk.add_argument("--name", default=None,
+                    help="optional: with the recorded (or given) version, must match the title `clips build` recorded")
     bk.add_argument("--port", type=int, default=None, help=argparse.SUPPRESS)
     bk.set_defaults(func=_build_kfs_cli)
 
     pc = s.add_parser("publish-clip", help="emit the Studio step that publishes the built, verified KeyframeSequence")
     pc.add_argument("--manifest", required=True)
     pc.add_argument("--clip", required=True, help=CLIP_HELP)
-    pc.add_argument("--version", type=int, default=None,
-                    help="optional: must match the title `clips build` recorded")
-    pc.add_argument("--name", default=None, help="optional: must match the title `clips build` recorded")
+    pc.add_argument("--version", type=_version_arg, default=None,
+                    help="optional: must match the title `clips build` recorded; default is its version")
+    pc.add_argument("--name", default=None,
+                    help="optional: with the recorded (or given) version, must match the title `clips build` recorded")
     pc.set_defaults(func=_publish_clip_cli)
 
     bc = s.add_parser("bench", help="emit the Play bench step for a PUBLISHED clip (hip drop, slide, head over sole)")
@@ -1231,9 +1323,9 @@ def register(sub):
 
     f = s.add_parser("bind"); f.add_argument("--manifest", required=True)
     f.add_argument("--ids", required=True, nargs="+", help="Clip=RobloxAssetId pairs, space-separated")
-    f.add_argument("--version", type=int, default=None,
-                   help="optional: must give the title `clips build` recorded; required for a clip with no "
-                        "build record")
+    f.add_argument("--version", type=_version_arg, default=None,
+                   help="optional: must give the title `clips build` recorded (default is its version); "
+                        "required for a clip with no build record")
     f.add_argument("--name", default=None, help="see `clips build --name`")
     f.set_defaults(func=_bind_cli)
 
