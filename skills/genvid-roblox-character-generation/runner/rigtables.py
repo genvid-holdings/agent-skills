@@ -60,6 +60,43 @@ UAL_MAP = {
     "RightUpperLeg": "DEF-thigh.R", "RightLowerLeg": "DEF-shin.R", "RightFoot": "DEF-foot.R",
 }
 
+CLIP_MODES = {"names": None, "mixamo": MIXAMO_MAP, "ual": UAL_MAP}
+
+
+def clip_bone_map(rest_names, clip_bone_names, *, mode="names", prefix=""):
+    """Which clip bone drives each rest bone, as `(src, held)`.
+
+    `rest_names` are the bones of the rig's rest dump: the fifteen R15 bones,
+    plus any extra bones the rig carries (wings, a jaw, cloth). An R15 bone is
+    read through the mode's table (`names`: its own name; `mixamo`: MIXAMO_MAP
+    behind the skeleton's `prefix`; `ual`: UAL_MAP), and a clip that lacks one
+    is refused. An extra bone is read by its own name (`prefix` + name first in
+    `mixamo` mode) when the clip has it; otherwise it is `held`: the transfer
+    leaves it at its rest pose, so one clip library serves rigs with and
+    without the extra bones.
+    """
+    if mode not in CLIP_MODES:
+        raise ValueError("unknown clip bone mode %r (one of %s)" % (mode, ", ".join(CLIP_MODES)))
+    table, have = CLIP_MODES[mode], set(clip_bone_names)
+    src, held, missing = {}, [], []
+    for n in rest_names:
+        if n in R15_BONES:
+            name = prefix + table[n] if table else n
+            if name in have:
+                src[n] = name
+            else:
+                missing.append(name)
+            continue
+        name = next((c for c in ((prefix + n, n) if mode == "mixamo" else (n,)) if c in have), None)
+        if name is None:
+            held.append(n)
+        else:
+            src[n] = name
+    if missing:
+        raise ValueError("clip lacks bones: %s" % missing)
+    return src, held
+
+
 # Vendor spellings folded onto the RENAME/MERGE keys (Tripo spec=mixamo, raw Mixamo).
 PREFIXES = ("mixamorig:", "mixamorig1:", "mixamorig_", "Armature|")
 ALIASES = {

@@ -30,8 +30,14 @@ end
 local planeTop = plane.Position.Y + plane.Size.Y / 2
 
 local model = template:Clone(); model.Parent = workspace
-local mesh = model:FindFirstChildWhichIsA("MeshPart", true)
-if "{{LOD}}" == "far" then mesh.RenderFidelity = Enum.RenderFidelity.Performance end
+local meshes = {}
+for _, d in model:GetDescendants() do
+	if d:IsA("MeshPart") then
+		table.insert(meshes, d)
+		if "{{LOD}}" == "far" then d.RenderFidelity = Enum.RenderFidelity.Performance end
+	end
+end
+assert(#meshes > 0, "no MeshPart")
 local hum = model:FindFirstChildOfClass("Humanoid")
 local hrp = model.PrimaryPart or model:FindFirstChild("HumanoidRootPart")
 local hip = model:GetAttribute("{{HIP_ATTR}}") or (hum and hum.HipHeight) or 0
@@ -51,23 +57,29 @@ model:PivotTo(CFrame.new(0, planeTop + bottom + (hrp and hrp.Size.Y / 2 or 0), 0
 for _, d in model:GetDescendants() do if d:IsA("BasePart") then d.Anchored = true end end
 task.wait()
 
--- Rest-pose lowest 200 vertices and their dominant bone, from the mesh's bind data.
+-- Rest-pose lowest 200 vertices and their dominant bone, from each mesh's bind
+-- data, over EVERY MeshPart (the same plane groundfit measured the sole offset
+-- from): a multi-mesh import can list a small accessory mesh first.
 local bones = {}
 for _, d in model:GetDescendants() do
 	if d:IsA("Bone") then bones[d.Name] = d end
 end
-local em = AssetService:CreateEditableMeshAsync(Content.fromAssetId(tonumber(mesh.MeshId:match("%d+"))))
-local verts = em:GetVertices()
-local restY = {}
-for _, vid in verts do
-	local p = mesh.CFrame:PointToWorldSpace(em:GetPosition(vid) * mesh.Size / mesh.MeshSize)
-	restY[vid] = p.Y
+local verts, ems = {}, {}
+for _, mesh in meshes do
+	local id = tonumber(mesh.MeshId:match("%d+"))
+	assert(id, "MeshPart " .. mesh:GetFullName() .. " has no MeshId; its vertices cannot be read")
+	local em = AssetService:CreateEditableMeshAsync(Content.fromAssetId(id))
+	table.insert(ems, em)
+	for _, vid in em:GetVertices() do
+		local p = mesh.CFrame:PointToWorldSpace(em:GetPosition(vid) * mesh.Size / mesh.MeshSize)
+		table.insert(verts, { mesh = mesh, em = em, vid = vid, y = p.Y })
+	end
 end
-table.sort(verts, function(a, b) return restY[a] < restY[b] end)
+table.sort(verts, function(a, b) return a.y < b.y end)
 local lowest = {}
 for i = 1, math.min(200, #verts) do lowest[i] = verts[i] end
 
-local function dominantBone(vid)
+local function dominantBone(em, vid)
 	local ok, ids, weights = pcall(function() return em:GetVertexBoneWeights(vid) end)
 	if not ok or not ids or #ids == 0 then return nil end
 	local best, bestW = ids[1], weights[1]
@@ -78,23 +90,25 @@ local function dominantBone(vid)
 	return ok2 and bones[name] or nil
 end
 
-local minY = math.huge
-for _, vid in lowest do
-	local bone = dominantBone(vid)
+local minY, feetMesh = math.huge, nil
+for _, v in lowest do
+	local bone = dominantBone(v.em, v.vid)
 	if bone then
-		local localOffset = em:GetPosition(vid) * mesh.Size / mesh.MeshSize
+		local mesh = v.mesh
+		local localOffset = v.em:GetPosition(v.vid) * mesh.Size / mesh.MeshSize
 		local worldP = bone.TransformedWorldCFrame:PointToWorldSpace(bone.CFrame:PointToObjectSpace(mesh.CFrame:PointToWorldSpace(localOffset)))
-		if worldP.Y < minY then minY = worldP.Y end
+		if worldP.Y < minY then minY, feetMesh = worldP.Y, mesh.Name end
 	end
 end
-if minY == math.huge then minY = restY[lowest[1]] end -- no skin data: fall back to the rest read
+if minY == math.huge then minY, feetMesh = lowest[1].y, lowest[1].mesh.Name end -- no skin data: fall back to the rest read
+for _, em in ems do em:Destroy() end
 
 local gap = minY - planeTop
 model:Destroy()
 -- Returned as well as printed: execute_luau hands back the chunk's return
 -- value, not its console output.
 local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ gap = gap, lod = "{{LOD}}",
-	measuredAt = bottom, settledMeasure = settled ~= nil,
+	measuredAt = bottom, settledMeasure = settled ~= nil, feetMesh = feetMesh,
 	-- Which context this ran in, reported rather than assumed: the far-LOD row
 	-- is only a measurement of its own when the vertex read happens in Play,
 	-- which needs the experience's Mesh & Image API setting.

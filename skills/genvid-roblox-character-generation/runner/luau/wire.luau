@@ -4,7 +4,6 @@ local model = {{MODEL_PATH}}
 -- No rescaling here: scale.luau already set the final height before the rest dump
 -- and ground-fit, so {{HIP_ATTR}} is at final scale (rescaling after ground-fit
 -- reproduces the August float/sink by exactly the scale factor).
-local mesh = model:FindFirstChildWhichIsA("MeshPart", true)
 -- 0. destroy the importer's AnimationController. The Studio importer adds one to
 -- an imported skinned Model, BESIDE the Humanoid this recipe creates, and with
 -- both present no AnimationTrack advances -- not on the Humanoid's Animator and
@@ -42,9 +41,20 @@ local h = 0.15 * height
 local hrp = Instance.new("Part"); hrp.Name = "HumanoidRootPart"; hrp.Size = Vector3.new(0.9 * h, h, 0.5 * h)
 hrp.CFrame = CFrame.new(lt.X, lt.Y, lt.Z); hrp.Transparency = 1; hrp.CanCollide = true; hrp.Anchored = false
 hrp.Parent = model; model.PrimaryPart = hrp
--- 3. weld the mesh to it
-mesh.CanCollide = false; mesh.Massless = true; mesh.Anchored = false
-local weld = Instance.new("WeldConstraint"); weld.Part0 = hrp; weld.Part1 = mesh; weld.Parent = hrp
+-- 3. weld every other part to it: each MeshPart of a multi-mesh import, and the
+-- 3D Importer's bone-holder part (the root bone's parent), which must ride the
+-- assembly or its bones part from the meshes. None of them collides or carries
+-- mass: the HumanoidRootPart is the one physics body, and an extra colliding
+-- part rests on the ground and holds the body up (1.07 studs, witnessed).
+local meshes, welded = {}, 0
+for _, d in model:GetDescendants() do
+	if d:IsA("BasePart") and d ~= hrp then
+		d.CanCollide = false; d.Massless = true; d.Anchored = false
+		local weld = Instance.new("WeldConstraint"); weld.Part0 = hrp; weld.Part1 = d; weld.Parent = hrp
+		welded += 1
+		if d:IsA("MeshPart") then table.insert(meshes, { name = d.Name, meshId = d.MeshId, textureId = d.TextureID }) end
+	end
+end
 -- 4. upright AlignOrientation (PrimaryAxis defaults to X — must be Y)
 local att = Instance.new("Attachment"); att.Name = "RootAttachment"; att.Parent = hrp
 local ao = Instance.new("AlignOrientation"); ao.Mode = Enum.OrientationAlignmentMode.OneAttachment
@@ -69,6 +79,16 @@ model:SetAttribute("SkinnedRig", true)
 -- primaryAxisCorrect, automaticScalingDisabled and fallStatesDisabled, and a
 -- report that merely echoed the inputs would pass while the engine had clamped
 -- HipHeight or refused a property.
+-- read back, not echoed: every part but the root non-colliding and massless,
+-- and every part in the root's one assembly (AssemblyRootPart is the root part
+-- the engine resolved for the welds; a part left out would be its own body)
+local colliding, outside = 0, 0
+for _, d in model:GetDescendants() do
+	if d:IsA("BasePart") then
+		if d ~= hrp and (d.CanCollide or not d.Massless) then colliding += 1 end
+		if d.AssemblyRootPart ~= hrp then outside += 1 end
+	end
+end
 -- Returned as well as printed: execute_luau hands back the chunk's return
 -- value, not its console output.
 local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ hip = hip, expected_hip = hum.HipHeight,
@@ -79,6 +99,7 @@ local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ hip = hip, exp
 	rigTypeR15 = hum.RigType == Enum.HumanoidRigType.R15,
 	noAnimationController = model:FindFirstChildWhichIsA("AnimationController", true) == nil,
 	hrpSize = { hrp.Size.X, hrp.Size.Y, hrp.Size.Z },
-	scale = model:GetScale(), meshId = mesh.MeshId, textureId = mesh.TextureID })
+	scale = model:GetScale(), meshes = meshes, weldedParts = welded,
+	noCollidingParts = colliding == 0, singleAssembly = outside == 0 })
 print(runnerResult)
 return runnerResult
