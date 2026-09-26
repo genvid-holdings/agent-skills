@@ -141,9 +141,9 @@ from rigtables import RENAME, MERGE, clip_bone_map, normalize  # noqa: E402
 
 import numpy as np
 
-
-def m3(v):
-    return np.array(v, dtype=float).reshape(3, 3)
+# rigmesh sits beside this script: the rest frame and the fitted rig mesh
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from rigmesh import m3, rest_order, rest_origins, rest_rotations, skin, skinned_rest  # noqa: E402
 
 
 def mat9(m):
@@ -207,10 +207,6 @@ def ry(deg):
     return np.array([[math.cos(a), 0, math.sin(a)], [0, 1, 0], [-math.sin(a), 0, math.cos(a)]])
 
 
-# The ground lock's rig-mesh fit refuses when a rest bone origin lands farther
-# than this fraction of the mesh height from where the mesh's own armature puts
-# it: the mesh is then not the rig rest.json was dumped from.
-GROUND_FIT_TOL = 0.01
 
 # A clip's bind is refused (no --bind-from) or reported (with it) when a bone
 # sits more than this many degrees off the rig's rest. A rig file against its
@@ -220,16 +216,6 @@ GROUND_FIT_TOL = 0.01
 BIND_TOL_DEG = 5.0
 # A --bind-from rig's leg chain must be the clip's length within this fraction.
 BIND_LEG_TOL = 0.01
-
-
-def rest_origins(rb, order, Rw, Pw):
-    """Each bone's rest origin in the rig frame (studs): parent origin plus
-    the parent's world rest rotation applied to the bone's offset."""
-    P0 = {}
-    for n in order:
-        pr = rb[n]["parent"]
-        P0[n] = P0.get(pr, np.zeros(3)) + Rw.get(pr, np.eye(3)) @ Pw[n]
-    return P0
 
 
 def segments(to, frm, rb, order):
@@ -394,83 +380,15 @@ DROPPED_TRANSLATION_TOL = 0.001
 def ground_lows(rig_mesh, clip_arm, rb, order, Rw, Pw, poses):
     """Lowest skinned vertex height (rig frame, studs) per frame, for the ground
     lock. `poses` is [(W, WPr)] per frame: each bone's rig-frame world rotation
-    and origin with no root motion. The rig glb is imported beside the clip,
-    its armature's R15 bone heads are fitted to rest.json's rest origins by a
-    similarity (scale, rotation, offset), and the mesh is skinned per frame
-    with its own weights: v' = sum_b w_b (W_b Rw_b^T (v - P0_b) + P_b). Every
-    skinned mesh parented to the armature is read: a multi-mesh rig can list a
-    head or accessory mesh first, and the soles are wherever they are."""
-    before = set(bpy.data.objects)
-    bpy.ops.import_scene.gltf(filepath=rig_mesh)
-    new = [o for o in bpy.data.objects if o not in before]
-    rig = next((o for o in new if o.type == "ARMATURE"), None)
-    meshes = [o for o in new if o.type == "MESH" and o.parent is rig and o.vertex_groups] if rig else []
-    if rig is None or not meshes:
-        raise ValueError(f"--rig-mesh={rig_mesh}: no armature with a skinned mesh in it")
-    missing = [n for n in order if n not in rig.data.bones]
-    if missing:
-        raise ValueError(f"--rig-mesh={rig_mesh}: armature lacks bones {missing}")
-    rig.data.pose_position = "REST"
-    bpy.context.view_layer.update()
-    parts = []
-    for mesh in meshes:
-        ev = mesh.evaluated_get(bpy.context.evaluated_depsgraph_get())
-        me = ev.to_mesh()
-        co = np.empty(len(me.vertices) * 3)
-        me.vertices.foreach_get("co", co)
-        mw = np.array(ev.matrix_world)
-        ev.to_mesh_clear()
-        parts.append(co.reshape(-1, 3) @ mw[:3, :3].T + mw[:3, 3])
-    V = np.concatenate(parts)
-    # rest origins in the rig frame, and the same bones' heads in Blender world
+    and origin with no root motion. The rig glb is imported beside the clip and
+    fitted to rest.json (`rigmesh.skinned_rest`), and the mesh is skinned per
+    frame with its own weights: v' = sum_b w_b (W_b Rw_b^T (v - P0_b) + P_b)."""
     P0 = rest_origins(rb, order, Rw, Pw)
-    src = np.array([P0[n] for n in order])
-    dst = np.array([list(rig.matrix_world @ rig.data.bones[n].head_local) for n in order])
-    ms, md = src.mean(0), dst.mean(0)
-    X, Y = src - ms, dst - md
-    U, S, Vt = np.linalg.svd(Y.T @ X)
-    D = np.eye(3)
-    D[2, 2] = np.sign(np.linalg.det(U @ Vt))
-    R = U @ D @ Vt
-    s = float((S * np.diag(D)).sum() / (X ** 2).sum())
-    off = md - s * R @ ms
-    Vr = ((V - off) @ R) / s                     # mesh in the rig frame, studs
-    # the largest distance between a rest bone origin and where the mesh's
-    # armature puts it, in studs
-    fit_err = float(np.linalg.norm((s * (R @ src.T)).T + off - dst, axis=1).max() / s) if s > 0 else math.inf
-    height = float(np.ptp(Vr[:, 1]))
-    tol = GROUND_FIT_TOL * height
-    print(f"ground lock: rig mesh {os.path.basename(rig_mesh)} fitted at {1 / s:0.3f} studs per unit, "
-          f"max bone-origin error {fit_err:0.4f} studs (tolerance {tol:0.3f}), mesh height {height:0.2f} studs")
-    if not fit_err <= tol:
-        raise ValueError(f"--rig-mesh={rig_mesh} does not fit rest.json: a bone origin is {fit_err:0.3f} studs off "
-                         f"(tolerance {tol:0.3f}); pass the skinned glb of the rig rest.json was dumped from")
-    Wt = np.zeros((len(Vr), len(order)))
-    col = {n: i for i, n in enumerate(order)}
-    base = 0
-    for mesh, part in zip(meshes, parts):
-        gi = {g.index: g.name for g in mesh.vertex_groups}
-        for v in mesh.data.vertices:
-            for ge in v.groups:
-                c = col.get(gi[ge.group])
-                if c is not None:
-                    Wt[base + v.index, c] += ge.weight
-        base += len(part)
-    keep = Wt.sum(1) > 0
-    Vr, Wt = Vr[keep], Wt[keep] / Wt[keep].sum(1, keepdims=True)
+    Vr, Wt, col, info = skinned_rest(rig_mesh, P0, order, "--rig-mesh")
+    print(f"ground lock: {info['rig_mesh']} fitted, max bone-origin error {info['fit_err_studs']} studs")
     rest_low = float(Vr[:, 1].min())
-    lows = []
-    for W, WPr in poses:
-        y = np.zeros(len(Vr))
-        for n, c in col.items():
-            w = Wt[:, c]
-            if w.any():
-                y += w * (((Vr - P0[n]) @ (W[n] @ Rw[n].T).T)[:, 1] + WPr[n][1])
-        lows.append(float(y.min()))
-    info = {"rig_mesh": os.path.basename(rig_mesh), "fit_err_studs": round(fit_err, 5),
-            "tolerance_studs": round(tol, 5), "studs_per_unit": round(1 / s, 5),
-            "vertices": int(len(Vr)), "meshes": len(meshes), "rest_low": round(rest_low, 5)}
-    return lows, info
+    lows = [float(skin(Vr, Wt, col, P0, Rw, W, WPr)[:, 1].min()) for W, WPr in poses]
+    return lows, dict(info, rest_low=round(rest_low, 5))
 
 
 def main():
@@ -606,27 +524,13 @@ def main():
             raise ValueError(f"--translate: {b} ({src[b]} in the clip) has no parent bone in the clip, "
                              "so it has no rest offset to measure a translation from")
 
-    kids = {}
-    for n, d in rb.items():
-        kids.setdefault(d["parent"], []).append(n)
-    order = []
-    # every bone hanging off the root part, not only LowerTorso: an extra bone
-    # parented to the root node would otherwise never be posed
-    stack = sorted(kids.get("HumanoidRootPart", []), reverse=True)
-    while stack:
-        n = stack.pop()
-        order.append(n)
-        stack.extend(kids.get(n, []))
-    unreached = sorted(set(rb) - set(order))
+    order, unreached = rest_order(rb)
     if unreached:
         # the transfer walks the chain from the root part: these get no track at all
         print(f"warning: rest.json bones not reached from HumanoidRootPart get no track: {', '.join(unreached)}")
 
     # Roblox world rests (HRP frame)
-    Rw = {}
-    for n in order:
-        pr = rb[n]["parent"]
-        Rw[n] = Rw.get(pr, np.eye(3)) @ m3(rb[n]["rot"])
+    Rw = rest_rotations(rb, order)
 
     # clip skeleton world rests + per-frame world anim (armature space)
     # WORLD space, not armature space: the FBX importer parks a rotation on

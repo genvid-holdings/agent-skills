@@ -52,6 +52,7 @@ import timing
 from impact import impact_time
 
 POSES_SCRIPT = Path(__file__).parent / "blender" / "poses.py"
+CONTACT_SCRIPT = Path(__file__).parent / "blender" / "contact.py"
 
 ANIMS_DIR_ENV = "GAME_ANIMS_DIR"
 
@@ -814,6 +815,64 @@ def impact(m, clip):
     return scaled
 
 
+def _rig_origin(m):
+    """What the manifest records about the rig rest.json was dumped from, for
+    a refusal to name: the rig stage's files and media id, and the rest dump's
+    own path."""
+    rig = m["stages"].get("rig") or {}
+    known = ["%s %s" % (k, rig[k]) for k in ("artifact", "artifact_fbx", "media_id") if rig.get(k)]
+    rest = (m["stages"].get("rest") or {}).get("artifact")
+    return "; ".join(known + (["rest.json at %s" % rest] if rest else [])) or "nothing recorded"
+
+
+def contact(m, clip, *, rig_mesh=None, rest="rest.json", blender=None):
+    """Measure where `clip`'s striking limb makes contact at the strike
+    (`blender/contact.py`: the strike read hands first off the clip's
+    trajectory, the rig's skinned mesh fitted to rest.json and posed at that
+    frame from the poses doc, the lowest vertex skinned mainly to the striking
+    bone or a bone under it, rig frame, studs) and record it on the clip's item
+    as `contact` {bone, t, lowest_y, bones, vertices, fit}, with the rig file's
+    path and the sha256 of the rig file, rest.json and the poses doc, and
+    `measured_by`. Eval row E21 reads a Slam's and refuses it once any of the
+    three files no longer matches. A re-transfer writes a fresh item, so a
+    contact never outlives the poses it was measured on. The rig file defaults
+    to `stages.rig.artifact_glb`; pass the skinned glb or fbx of the rig
+    rest.json was dumped from otherwise."""
+    items = (m["stages"].get("clips") or {}).get("items") or {}
+    item = items.get(clip)
+    if not item or not item.get("poses"):
+        raise ValueError("clips contact: %s has no transferred item; transfer %s first" % (clip, clip))
+    rig_mesh = rig_mesh or (m["stages"].get("rig") or {}).get("artifact_glb")
+    if not rig_mesh:
+        raise ValueError("clips contact reads the rig's skinned mesh, and stages.rig records no artifact_glb: pass "
+                         "--rig-mesh <the skinned glb or fbx of the rig rest.json was dumped from; the manifest "
+                         "records: %s>" % _rig_origin(m))
+    if not Path(rig_mesh).is_file():
+        raise FileNotFoundError("clips contact: rig mesh %s is not on disk" % rig_mesh)
+    out = Path(m["out_dir"])
+    rest_path = Path(rest) if Path(rest).is_absolute() else out / rest
+    poses_path = Path(item["poses"])
+    out_path = out / "clips" / ("%s.contact.json" % clip)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if out_path.exists():
+        out_path.unlink()   # a stale file from an earlier run must not read as this one
+    r = subprocess.run([blender or shutil.which("blender"), "--background", "--python-exit-code", "1",
+                        "--python", str(CONTACT_SCRIPT), "--", str(rig_mesh), str(rest_path), str(poses_path),
+                        str(out_path)], capture_output=True, text=True)
+    if r.returncode != 0 or not out_path.exists():
+        raise RuntimeError("clips contact failed for %s (rc=%s, wrote=%s): %s"
+                           % (clip, r.returncode, out_path.exists(), r.stderr[-2000:]))
+    doc = json.loads(out_path.read_text())
+    items = dict(items)
+    items[clip] = dict(item, contact=dict(
+        doc, rig_mesh=str(rig_mesh), rig_sha256=request.sha256_of(Path(rig_mesh)),
+        rest_sha256=request.sha256_of(rest_path), poses_sha256=request.sha256_of(poses_path),
+        measured_by="blender/contact.py"))
+    manifest.set_stage(m, "clips", items=items)
+    manifest.save(m)
+    return items[clip]["contact"]
+
+
 def speed_scale(m):
     """animSpeedScale = walkSpeed / strideStudsPerSec, from the in-engine
     treadmill measurement (`studio.py` ingests `treadmill.luau`'s
@@ -1264,6 +1323,10 @@ def _impact_cli(x):
     impact(_on_item(x, "impact"), x.clip)
 
 
+def _contact_cli(x):
+    contact(manifest.load(x.manifest), x.clip, rig_mesh=x.rig_mesh, rest=x.rest, blender=x.blender)
+
+
 def _speed_scale_cli(x):
     speed_scale(manifest.load(x.manifest))
 
@@ -1403,6 +1466,14 @@ def register(sub):
     c = s.add_parser("impact"); c.add_argument("--manifest", required=True)
     c.add_argument("--clip", required=True, help=CLIP_HELP)
     c.set_defaults(func=_impact_cli)
+
+    ct = s.add_parser("contact"); ct.add_argument("--manifest", required=True)
+    ct.add_argument("--clip", required=True, help=CLIP_HELP)
+    ct.add_argument("--rig-mesh", default=None,
+                    help="the skinned glb or fbx of the rig rest.json was dumped from (default stages.rig.artifact_glb)")
+    ct.add_argument("--rest", default="rest.json")
+    ct.add_argument("--blender")
+    ct.set_defaults(func=_contact_cli)
 
     d = s.add_parser("speed-scale"); d.add_argument("--manifest", required=True)
     d.set_defaults(func=_speed_scale_cli)
