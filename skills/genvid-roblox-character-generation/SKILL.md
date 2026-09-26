@@ -898,12 +898,17 @@ in the game:
    rest was dumped from), when its leg chain is not the clip's length within
    1% (another skeleton or scale), or when its world is turned from the
    clip's (a glb twin turned a half turn from the fbx the clip was authored
-   against; pass the file the clip was authored against). A clip whose bind
-   is posed off the rest on most bones cannot be checked for a turn. A file
-   placed elsewhere in the world shifts `--root-ref=bind` root motion and
-   cannot be told from a clip whose bind is itself displaced, so the item
-   records the distance between the two hips as `bind_hips_offset_studs`;
-   check it before using the `bind` reference. `--bind-from clip` transfers from the clip's
+   against; pass the file the clip was authored against). That frame check
+   is recorded as `bind_frame` on the poses doc and the item: `aligned`, or
+   `inconclusive (N of M bones agree)` when the clip's bind is posed off the
+   rest on most bones and a turned file cannot be told from the pose; the
+   transfer continues on `inconclusive`, and a manifest note says so, so check
+   such a clip in Studio. A file placed elsewhere in the world shifts
+   `--root-ref=bind` root motion and cannot be told from a clip whose bind is
+   itself displaced, so the item records the distance between the two hips
+   as `bind_hips_offset_studs`. Under `--root-ref=bind` that distance is a
+   constant root-motion offset on every frame (the default `first` reference
+   does not read it): check it before using the `bind` reference. `--bind-from clip` transfers from the clip's
    own bind anyway, for a clip on another skeleton whose rest is in no file
    at hand. The item records `bind_from` and `bind_mismatch_deg` (bone ->
    degrees the clip's own bind is off), and a manifest note names those

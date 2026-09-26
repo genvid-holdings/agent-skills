@@ -343,9 +343,11 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
     whose bind the transfer measures from instead of the clip file's, or
     "clip" to transfer from the clip's own bind even where it is off the rig's
     rest (poses.py refuses that without it). The item records `bind_from`,
-    `bind_mismatch_deg` (bone -> degrees the clip's own bind is off) and
+    `bind_mismatch_deg` (bone -> degrees the clip's own bind is off),
     `bind_hips_offset_studs` (how far the rig file's hips sit from the clip
-    bind's), and a manifest note names those bones.
+    bind's) and `bind_frame` (poses.py's world-frame check: `aligned` or
+    `inconclusive`, with how many bones agree); manifest notes name those
+    bones and an inconclusive frame check.
 
     The item a re-transfer replaces is appended to
     `stages.clips.superseded[<clip>]` when it carries any of
@@ -485,7 +487,12 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
             "trim": list(trim_range) if trim_range else None,
             "translate": poses.get("translate", []), "translation_dropped": poses.get("translation_dropped", {}),
             "bind_from": poses.get("bind_from"), "bind_mismatch_deg": poses.get("bind_mismatch_deg", {}),
-            "bind_hips_offset_studs": poses.get("bind_hips_offset_studs")}
+            "bind_hips_offset_studs": poses.get("bind_hips_offset_studs"), "bind_frame": poses.get("bind_frame")}
+    frame = item["bind_frame"]
+    if frame and frame["state"] == "inconclusive":
+        manifest.note(m, "clips transfer: %s frame check inconclusive (%s of %s bones agree): the clip's bind is posed "
+                         "too far from the rest to confirm %s is in the clip's world"
+                      % (clip, frame["agree"], frame["bones"], item["bind_from"]))
     if item["bind_mismatch_deg"]:
         manifest.note(m, "clips transfer: %s's own bind is off by more than %s deg at %s; transferred from %s"
                       % (clip, poses.get("bind_tolerance_deg"),
