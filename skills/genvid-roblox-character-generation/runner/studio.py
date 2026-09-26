@@ -78,7 +78,10 @@ converged on (+0.006 / -0.0003 / +0.003 studs) are that second measurement.
 
 Until it exists, `settled_bottom()` is None, the probe falls back to the hip and
 says so, and E13 reports PEND rather than scoring a fallback (measuring at the
-hip reads -e, which passes the +-0.5 gate on a rig nothing verified).
+hip reads -e, which passes the +-0.5 gate on a rig nothing verified). The second
+settle verifies the fit only when its settled bottom is within
+SETTLE_VERIFY_TOL (E13's gate) of the sole offset; a miss is recorded under
+`verification_miss`, the ingest fails naming both numbers, and E13 scores it.
 """
 import json
 import re
@@ -248,6 +251,15 @@ def render(step, **params):
 # be confused with is 0.45 studs at its smallest across the bake-off legs, and
 # the residuals at convergence are ~0.006, so 0.01 separates the two cleanly.
 HIP_MATCH_TOL = 0.01
+
+# How far a verification settle's root bottom may sit from the sole offset for
+# the ground fit to count as verified. With the corrected hip on the template,
+# settledBottom - soleOffset is how far the rest pose's lowest vertex stands off
+# the plane: the gap E13 scores, read at the root instead of at the vertex, so
+# the tolerance is E13's gate. Converged fits land well inside it (+0.006 /
+# -0.0003 / +0.003 studs on three rigs whose hover constants were 0.45 / 0.89 /
+# 1.03); a body held up by a second colliding part missed by 1.07.
+SETTLE_VERIFY_TOL = eval_cmd.E13_GAP_TOL
 
 
 def settled_bottom(m):
@@ -634,15 +646,28 @@ def ingest(m, step, result_path, lod=None, clip=None):
                       hover_excess=float(data["settledBottom"]) - float(data["hip"]),
                       corrected_hip=hip)
         applied = ((m["stages"].get("groundfit") or {}).get("hip_applied") or {}).get("hip")
+        fields["verification_miss"] = None
+        miss = None
         if applied is not None and abs(float(data["hip"]) - float(applied)) <= HIP_MATCH_TOL:
             # A VERIFICATION settle: this one ran with the corrected hip already
             # written onto the template, so its settled bottom measures the
-            # loop's OUTPUT rather than its input. Only this number may pose
-            # probe_feet -- see settled_bottom(). Kept with the hip it was
-            # measured at so a later sethip invalidates it instead of aging into
-            # a wrong answer.
-            fields["verified"] = {"hip": float(data["hip"]),
-                                  "bottom": float(data["settledBottom"])}
+            # loop's OUTPUT rather than its input. It verifies the fit only when
+            # that bottom lands on the sole offset (SETTLE_VERIFY_TOL); only a
+            # verified number may pose probe_feet -- see settled_bottom(). Kept
+            # with the hip it was measured at so a later sethip invalidates it
+            # instead of aging into a wrong answer.
+            gap = float(data["settledBottom"]) - float(sole)
+            if abs(gap) <= SETTLE_VERIFY_TOL:
+                fields["verified"] = {"hip": float(data["hip"]),
+                                      "bottom": float(data["settledBottom"])}
+            else:
+                # Recorded, then refused: the step fails, E13 scores the miss
+                # (eval_cmd._row_E13), and probe_feet falls back to the hip
+                # rather than being posed at a height no ground fit produced.
+                fields["verified"] = None
+                miss = fields["verification_miss"] = {
+                    "settledBottom": float(data["settledBottom"]), "soleOffset": float(sole),
+                    "gap": gap, "tolerance": SETTLE_VERIFY_TOL}
         else:
             # This settle ran at a hip `sethip` did not write, so the template is
             # not in the state any earlier verification measured -- a re-run of
@@ -650,6 +675,14 @@ def ingest(m, step, result_path, lod=None, clip=None):
             # verification rather than let probe_feet be posed from it.
             fields["verified"] = None
         manifest.set_stage(m, "groundfit", **fields)
+        if miss is not None:
+            manifest.save(m)
+            raise RuntimeError(
+                "settle: ground fit NOT verified -- the settled root bottom %.4f studs is %+.4f from the "
+                "sole offset %.4f (tolerance %g). Something other than the soles is touching the ground "
+                "or the hip did not take; check that every part but the HumanoidRootPart is "
+                "non-colliding, then run the settle loop again (settle, sethip, settle)"
+                % (miss["settledBottom"], miss["gap"], miss["soleOffset"], SETTLE_VERIFY_TOL))
     elif step == "sethip":
         assert "hip" in data, "sethip result lacks hip: %r" % (data,)
         manifest.set_stage(m, "groundfit", hip_applied=data)

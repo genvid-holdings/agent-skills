@@ -22,13 +22,16 @@ def _rot3(entry):
     return [r[0:3], r[3:6], r[6:9]]
 
 def rest_dump_detail(rest, tol=1e-3):
-    """Which R15 bones the dump_rest output is missing or malformed, and which
-    carry a frame that is not a rotation (`R @ R^T != I` within `tol`, or a
-    mirrored frame, `det <= 0`). Diagnostics for the manifest; the booleans the
-    E11 gate reads come from rest_dump_checks."""
+    """Which R15 bones the dump_rest output is missing, which of its entries are
+    malformed (an extra bone's included; both are listed as `missing`), and
+    which carry a frame that is not a rotation (`R @ R^T != I` within `tol`, or
+    a mirrored frame, `det <= 0`). Every dumped bone is checked, the R15 ones
+    and any extra bones the rig carries. Diagnostics for the manifest; the
+    booleans the E11 gate reads come from rest_dump_checks."""
     rest = rest if isinstance(rest, dict) else {}
     missing, non_orthonormal, worst = [], [], 0.0
-    for bone in rigtables.R15_BONES:
+    extras = sorted(b for b in rest if b not in rigtables.R15_BONES)
+    for bone in list(rigtables.R15_BONES) + extras:
         r = _rot3(rest.get(bone))
         if r is None:
             missing.append(bone)

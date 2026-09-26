@@ -39,19 +39,50 @@ def _pose_xml(name, rot, children, ref, pos=(0.0, 0.0, 0.0)):
             "<float name=\"Weight\">1</float><token name=\"EasingDirection\">0</token>"
             "<token name=\"EasingStyle\">0</token></Properties>%s</Item>" % (ref, escape(name), _cframe_xml(rot, pos), inner))
 
+def _omitted(poses):
+    """The held bones (poses.py `held`: extra bones the clip does not drive) this
+    sequence leaves out altogether.
+
+    A present Pose claims its joint: the Animator evaluates tracks "in order from
+    high to low priority, per joint", and "Higher priority animation will
+    override lower priority ones per joint" (creator docs, enums/
+    AnimationPriority; classes/AnimationTrack.Priority), so an identity Pose on a
+    joint an Action clip does not animate would still pin it over an Idle that
+    does. A held bone is therefore omitted unless it has to stay as a structural
+    node: it carries root motion (`r`), or a descendant is driven (`p`) or
+    translated (`r`). A poses doc without `held` omits nothing."""
+    held = set(poses.get("held") or ())
+    if not held:
+        return set()
+    carried = set()
+    for fr in poses["frames"]:
+        carried.update(fr.get("p") or {})
+        carried.update(fr.get("r") or {})
+    parent = poses["hier"]
+    needed = set()
+    for bone in carried:
+        while bone and bone not in needed:
+            needed.add(bone)
+            bone = parent.get(bone)
+    return held - needed
+
+
 def write(poses, path, *, name, height_studs, loop, priority, root_scale=1.0, root_node=True, time_scale=None):
     hier = poses["hier"]
+    omit = _omitted(poses)
     kids = {}
     for bone, parent in hier.items():
-        kids.setdefault(parent if parent else "HumanoidRootPart", []).append(bone)
+        if bone not in omit:
+            kids.setdefault(parent if parent else "HumanoidRootPart", []).append(bone)
     n = [0]
     def ref():
         n[0] += 1; return "RBX%d" % n[0]
     def pose(bone, p, r):
         rot = quat_to_rot(p[bone]) if bone in p else [[1,0,0],[0,1,0],[0,0,1]]
-        # root motion (poses.py "r"): a per-bone translation in the bone's rest
-        # frame, carried only by the root bone(s) under HumanoidRootPart
-        # divided by the Studio model scale: the Animator multiplies a pose
+        # poses.py "r": a per-bone translation in the bone's rest frame, carried
+        # by the root bone(s) under HumanoidRootPart (root motion) and by any
+        # bone the transfer was asked to translate (`--translate`), divided by
+        # the Studio model scale: the Animator multiplies a pose
         # translation by Model:GetScale() (witnessed 2026-09-08), so studs
         # authored here land as studs in the game only after that division
         pos = tuple(v / root_scale for v in r[bone]) if bone in r else (0.0, 0.0, 0.0)

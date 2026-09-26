@@ -295,7 +295,11 @@ physics are not usable as-is), applicable to any character on this pipeline:
    `Humanoid` NumberValues, per-`Bone` `OriginalPosition`, and
    `AvatarPartScaleType = "Classic"`.
 2. Rebuild `HumanoidRootPart` as a torso box at the `LowerTorso` bone.
-3. `WeldConstraint` the mesh to it (`CanCollide = false`, `Massless = true`).
+3. `WeldConstraint` every other part to it — each `MeshPart` of a
+   multi-mesh import and the importer's bone-holder part (the root bone's
+   parent) — with `CanCollide = false`, `Massless = true`. The
+   `HumanoidRootPart` is the rig's one physics body: any other part left
+   colliding rests on the ground and holds the body up.
 4. Upright `AlignOrientation` (`OneAttachment`, `PrimaryAxisOnly`, axis `Y`,
    rigid). `AlignOrientation`'s `PrimaryAxis` **defaults to `X`** — leaving the
    default silently floats the rig horizontal instead of upright; it must be
@@ -304,7 +308,9 @@ physics are not usable as-is), applicable to any character on this pipeline:
 6. `AutomaticScalingEnabled = false`, **then** pin `HipHeight` — Play-start
    recomputes `HipHeight` to garbage if scaling is still enabled when it's
    set. The `HipHeight` formula is
-   `hip = (rootY − feetPlane) − rootSize.Y / 2`. No fixed hip figure is
+   `hip = (rootY − feetPlane) − rootSize.Y / 2`, with `feetPlane` the lowest
+   vertex over every `MeshPart` (a multi-mesh import can list a small
+   accessory mesh first). No fixed hip figure is
    canonical for any character: it changes with every import's geometry.
    Use the formula, not a number from another import.
 7. Release the rig via `ChangeState(GettingUp)`.
@@ -643,7 +649,7 @@ above):
     studio emit park ...     ; ingest park ...         # EDIT: moves the template into the park folder
     studio emit settle ...   ; ingest settle ...       # PLAY: measures the hover constant
     studio emit sethip ...   ; ingest sethip ...       # EDIT: writes the corrected HipHeight
-    studio emit settle ...   ; ingest settle ...       # PLAY: verifies the fix
+    studio emit settle ...   ; ingest settle ...       # PLAY: verifies the fix (or fails; see below)
     studio emit probe_feet ...; ingest probe_feet --lod close ...                      # EDIT: close LOD
     studio emit probe_feet --param LOD=far ...; ingest probe_feet --lod far ...        # EDIT: far LOD
 
@@ -655,6 +661,14 @@ is what `Humanoid.HipHeight` needs so a *live* rig's soles actually touch the
 ground: `SoleOffsetStuds` minus the hover constant. Using one where the other
 is wanted floats or sinks the rig by exactly that constant.
 
+The second settle verifies the fit only when its settled root bottom lands
+within E13's gap tolerance (0.5 studs) of `SoleOffsetStuds`: that difference
+is the gap E13 scores, read at the root. A miss is recorded under
+`stages.groundfit.verification_miss`, the ingest fails naming both numbers,
+and E13 scores the miss (FAIL, with both numbers under the row) until a
+verified settle clears it. The usual cause is a part other than the
+`HumanoidRootPart` still colliding.
+
 **The clip route.** One clip, from source motion to a governed, published
 Roblox animation, with no Save-to-Roblox click on the path. It runs once the
 template is wired and parked (Stage order, above):
@@ -664,7 +678,8 @@ template is wired and parked (Stage order, above):
     runner clips ingest motion --manifest M --clip <key> --mode <convention> --provider ... --model ... --cost ... <result>
     runner clips transfer --manifest M --clip <key> [--candidate N | --source generated] \
         [--g <name> | --g-from <key>] [--no-root] [--root-ref first|bind] \
-        [--root-y hips|ground [--rig-mesh <glb>]] [--trim START:END]
+        [--root-y hips|ground [--rig-mesh <glb>]] [--trim START:END] [--translate BONE[,BONE...]] \
+        [--bind-from <rig fbx|glb> | --bind-from clip]
     runner clips build --manifest M --clip <key> [--anims-dir <dir>] [--time-scale <factor>]   # then let Rojo sync
     runner clips build-kfs --manifest M --clip <key>                          # Edit; read-only verify
     runner studio ingest build_kfs --manifest M --clip <key> <result>
@@ -685,7 +700,10 @@ template is wired and parked (Stage order, above):
   root motion from the clip's first frame (the default) or the bind pose;
   `--root-y ground` is the opt-in ground lock, which skins
   `stages.rig.artifact_glb` unless `--rig-mesh` names another glb; `--trim
-  START:END` keeps one range of the source clip, in seconds of authored time.
+  START:END` keeps one range of the source clip, in seconds of authored time;
+  `--translate BONE[,BONE...]` carries those non-root bones' translation
+  (below the transfer laws); `--bind-from <file>` measures the transfer from
+  the bind of the skeleton the clip was authored on (law 8).
   Re-transferring a clip that was built, benched, published or bound keeps
   the item it replaces on `stages.clips.superseded.<key>` and notes its
   title, Roblox id and Genvid media id on the manifest.
@@ -854,6 +872,45 @@ in the game:
    it names the clip), and eval rows E15, E20 and E21 (E20 reads the Attack
    clip's own impact; the mirror only where it can be the Attack clip's). A clip
    with no `time_scale` keeps the height stretch.
+7. *A rig's extra bones ride along.* The rest dump carries every bone but the
+   root node, so a rig with bones beyond R15 (wings, a jaw, cloth) gets them
+   into the transfer. A clip must drive every R15 bone; an extra bone it keys
+   is transferred, one it does not key is held at its rest and listed under
+   `held` in the poses JSON. A held bone is left out of the KeyframeSequence,
+   because the Animator resolves priority per joint and a present Pose claims
+   its joint: an Action clip that does not key the wings leaves them to the
+   Idle underneath. A held bone stays in only as a structural identity Pose,
+   when it carries root motion or a descendant is driven or translated.
+8. *Deltas are measured from the rig's rest, not from whatever the clip file
+   calls its bind.* Every frame is transferred as the clip's world rotation
+   relative to its skeleton's bind, and root motion with `--root-ref=bind`
+   starts at the bind's hips. A clip exported from a DCC can carry "the pose
+   at export" as its bind (its first frame, its end pose), and then every
+   frame is wrong by that pose: a collapse played in reverse, a walk whose
+   axis-map pick sends up to down. On the empirical axis-map branch (every
+   clip but a native Mixamo or Rigify one) `clips transfer` refuses a clip
+   whose bind sits more than 5 degrees off the rig's rest, naming each bone
+   and its angle. Pass `--bind-from <the fbx or glb of the skeleton the clip
+   was authored on, in its rest>` (the rig's own file for a clip authored on
+   the rig; bones matched by name, after the `rename` convention when the
+   clip takes it): the transfer then measures from that file's bind. The file
+   is refused when its bind is itself off rest.json (it is not the rig the
+   rest was dumped from), when its leg chain is not the clip's length within
+   1% (another skeleton or scale), or when its world is turned from the
+   clip's (a glb twin turned a half turn from the fbx the clip was authored
+   against; pass the file the clip was authored against). A clip whose bind
+   is posed off the rest on most bones cannot be checked for a turn. A file
+   placed elsewhere in the world shifts `--root-ref=bind` root motion and
+   cannot be told from a clip whose bind is itself displaced, so the item
+   records the distance between the two hips as `bind_hips_offset_studs`;
+   check it before using the `bind` reference. `--bind-from clip` transfers from the clip's
+   own bind anyway, for a clip on another skeleton whose rest is in no file
+   at hand. The item records `bind_from` and `bind_mismatch_deg` (bone ->
+   degrees the clip's own bind is off), and a manifest note names those
+   bones. The check reads bone directions only, so without `--bind-from` a
+   bone with no child in the clip (a hand, a foot, a wing tip) is not
+   measured and a bone rolled about its own length is not seen. A driver that
+   runs `poses.py` directly passes `--bind-from=<file>` itself.
 
 And one reference rule: root motion is measured from the clip's FIRST FRAME
 (`--root-ref=first`, the default), because library clips do not all start at
@@ -896,6 +953,31 @@ records `trim`. Re-transferring a clip drops the impact `clips impact`
 measured on it, and the mirror when it names that clip (re-run `clips
 impact`); every other clip keeps its own. `clips build` refuses a clip's
 recorded impact time past that clip's end.
+
+Below the root, the transfer is rotation-only by default: a bone the clip
+moves by translation (a brow or lid sliding on the face) stays at its rest
+offset. Rotation-only is the safe default because a non-root bone's authored
+offset belongs to the source skeleton's proportions, which the rig's own rest
+replaces, and a translation has to be scaled from clip units to studs and
+then by the model scale, where a rotation needs neither. `clips transfer
+--translate BONE[,BONE...]` carries the named bones' translation: each
+bone's displacement from where its parent's animated frame puts it at rest,
+mapped by the same `g` and scaled by the same `k` as the root motion, and
+written in the bone's rest frame under its parent's transferred rotation, so
+it follows the parent as it turns. A root bone is refused (its translation is
+the root motion), as is a bone not in rest.json, a bone the clip does not
+key (held at rest) and a bone whose clip bone has no parent to measure it
+from. Every transfer names the rest.json bones it
+left rotation-only although the clip translates them
+(`translation_dropped` on the item, bone -> largest displacement in studs);
+read it after the first transfer of a rig-authored clip and pass the bones
+that are meant to slide. A bone that both rotates and translates is carried
+the same way; check it in Studio before publishing. `kfs.write` divides these
+translations by the model scale exactly as it does the root motion (law 4),
+and the item records `translate`. The rest dump must carry the bone for any
+of this to apply: a bone missing from rest.json gets no track, and so does a
+rest.json bone whose parent chain does not reach HumanoidRootPart (the
+transfer prints a warning naming it).
 
 **Bench before you publish, sample the right property.** The bench that
 proves a clip is a Play clone with the published id (a parked, unpublished

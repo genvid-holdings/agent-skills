@@ -6,7 +6,38 @@ Run headless:
   blender --background --python poses.py -- <clip.fbx|glb> <rest.json> <out.json> \\
       [--rename|--donor|--mixamo|--ual] [--action=NAME] [--rig-height=<studs>] \\
       [--g=<candidate>] [--no-root] [--root-ref=first|bind] [--trim=START:END] \\
-      [--root-y=hips|ground --rig-mesh=<rig.glb>]
+      [--root-y=hips|ground --rig-mesh=<rig.glb>] [--translate=BONE[,BONE...]] \\
+      [--bind-from=<rig.fbx|glb>|clip]
+
+`--bind-from=<rig file>` takes the bind the transfer measures from (Bw below,
+and the hips the `bind` root reference starts at) from the fbx or glb of the
+skeleton the clip was authored on, in its rest, instead of from the clip file;
+bones are matched by rest.json name, after the same rename `--rename` gives the
+clip. A DCC can export "the pose at export" as a clip's bind (its first frame,
+its end pose), and every frame then transfers wrong by that difference.
+Without the flag, on the empirical axis-map branch (below), a clip whose bind
+sits off rest.json by more than `BIND_TOL_DEG` is REFUSED, naming each bone
+and its angle: a transfer from a mismatched bind has no correct output.
+`--bind-from=clip` transfers from the clip's own bind anyway (a clip on
+another skeleton whose rest is in no file at hand), printing and recording
+the same bones and angles. The comparison is frame-free (bone directions after
+the best rigid fit of the bind onto the rest), so a bone with no child in the
+clip is not measured, and a bone rolled about its own length is not seen. A
+rig file is refused when its bind is off rest.json by more than the tolerance
+(it is not the rig rest.json was dumped from), when its leg chain is not the
+clip's length within 1% (another skeleton or scale: the rest hips would land
+in other units), or when its world is turned from the clip's (`frame_turn`: a
+glb twin exported a half turn from the fbx the clip was authored against
+passes every frame-free check and flips every frame); the bones where the
+clip's own bind differs from the rig file's by more than the tolerance are
+printed. A rig file placed elsewhere in the world moves the `bind` root
+reference, and cannot be told from a clip whose bind is itself displaced (a
+flying pose), so the distance between the two hips is printed and recorded
+(`bind_hips_offset_studs`); the default `first` reference does not read it.
+Either way the doc records `bind_from` and those bones under
+`bind_mismatch_deg`. The
+flag is refused with `--mixamo` and `--ual`: those clips are on another
+skeleton, whose own bind the analytic branch re-rests onto by design.
 
 `--root-y=ground` locks the vertical root motion to the ground: every frame's
 vertical offset puts the rig's lowest skinned vertex (the mesh in `--rig-mesh`,
@@ -21,11 +52,21 @@ kept range starts at 0: a library clip that repeats its action is cut to one
 action before anything else reads it (root reference, axis scoring,
 trajectories, `clip_seconds`). A range outside the clip is refused.
 
+`--translate=BONE[,BONE...]` carries the named non-root bones' authored
+translation into their Pose positions (see below). Name a bone the clip
+animates by translation, such as a brow or lid sliding on the face; a root
+bone is refused, because its translation is the root motion. Every other
+non-root bone the clip translates is reported as dropped, by name and by how
+far it moves.
+
 `rest.json` is the target rig's actual bone rest data dumped from Studio by
 `runner/luau/dump_rest.luau` (per bone: parent, rot 3x3 row-major from
 CFrame:GetComponents, pos), ingested by `studio.py` to `<out>/rest.json`. The rig
 is scaled to its final height BEFORE that dump, so every number here is at final
-scale.
+scale. It carries every bone of the rig but the root node: the fifteen R15 bones
+and any extra ones (wings, a jaw, cloth). The clip must drive every R15 bone; an
+extra bone it does not key is held at its rest, left out of the frames, and
+listed under `held` in the output.
 `--rename` applies the Meshy->R15 bone rename/merge first (raw vendor clips need
 it; clips authored on an already-R15-named skeleton, e.g. Mixamo retargets of our
 exported rig, do not). `--donor` is an ALIAS for `--rename`: a Meshy-library clip
@@ -49,8 +90,15 @@ T_i(t) = rest_i^-1·Wp^-1·W_i recursively, where A/B are the clip skeleton's
 world anim/rest rotations, R/rest are the ROBLOX rig's actual world/local
 rests, and g is one global axis conversion chosen EMPIRICALLY: the candidate
 whose predicted foot trajectory best matches the authored clip (lateral vs
-forward swing and height range) wins. Translations are dropped by design;
-rotation-only clips are immune to every scale pitfall this pipeline has hit.
+forward swing and height range) wins. Below the root, translations are
+dropped unless `--translate` names the bone: a rotation-only transfer is
+immune to the scale pitfalls (clip units against studs, the model scale the
+Animator applies), and a non-root bone's authored offset belongs to the source
+skeleton's proportions, which the rig's own rest replaces. A named bone's
+translation is its head's displacement from where its parent's animated
+frame puts it at rest, in clip world, mapped by the same `g` and scaled by
+the same `k` as the root motion, then expressed in the bone's rest frame
+under its parent's transferred rotation.
 
 Ported from the retired pipeline's stage_h_poses.py. Changes from that source:
 the RENAME/MERGE/MIXAMO_MAP/UAL_MAP tables come from the runner's `rigtables`
@@ -71,7 +119,7 @@ import sys
 
 # rigtables lives in the runner package dir, one level up from blender/.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from rigtables import RENAME, MERGE, MIXAMO_MAP, UAL_MAP, normalize  # noqa: E402
+from rigtables import RENAME, MERGE, clip_bone_map, normalize  # noqa: E402
 
 import numpy as np
 
@@ -146,6 +194,174 @@ def ry(deg):
 # it: the mesh is then not the rig rest.json was dumped from.
 GROUND_FIT_TOL = 0.01
 
+# A clip's bind is refused (no --bind-from) or reported (with it) when a bone
+# sits more than this many degrees off the rig's rest. A rig file against its
+# own rest dump, and vendor-library clips whose bind is the rig's rest, read
+# 0.0 on every bone; the smallest mismatch witnessed that moves a limb (a
+# stance exported as the bind) reads 6.7.
+BIND_TOL_DEG = 5.0
+# A --bind-from rig's leg chain must be the clip's length within this fraction.
+BIND_LEG_TOL = 0.01
+
+
+def rest_origins(rb, order, Rw, Pw):
+    """Each bone's rest origin in the rig frame (studs): parent origin plus
+    the parent's world rest rotation applied to the bone's offset."""
+    P0 = {}
+    for n in order:
+        pr = rb[n]["parent"]
+        P0[n] = P0.get(pr, np.zeros(3)) + Rw.get(pr, np.eye(3)) @ Pw[n]
+    return P0
+
+
+def segments(to, frm, rb, order):
+    """Each bone's direction (its origin to a child's) in two skeletons, as
+    (parent, direction in `to`, direction in `frm`), for the bones both carry.
+    A zero-length offset is left out."""
+    segs = []
+    for n in order:
+        pr = rb[n]["parent"]
+        if n not in to or pr not in to or n not in frm or pr not in frm:
+            continue
+        a, b = np.asarray(to[n]) - np.asarray(to[pr]), np.asarray(frm[n]) - np.asarray(frm[pr])
+        la, lb = float(np.linalg.norm(a)), float(np.linalg.norm(b))
+        if la >= 1e-6 and lb >= 1e-9:
+            segs.append((pr, a / la, b / lb))
+    return segs
+
+
+def angle_deg(a, b):
+    return math.degrees(math.acos(max(-1.0, min(1.0, float(a @ b)))))
+
+
+def trimmed_fit(segs, tol=BIND_TOL_DEG):
+    """The rotation taking the `frm` directions onto the `to` ones (best rigid
+    fit), and each direction's angle after it. The worst-fitting direction is
+    dropped from the fit and the fit redone while one is over `tol` and more
+    than half remain, so a few bones posed differently do not tilt the fit for
+    the others."""
+    keep = list(range(len(segs)))
+    while True:
+        U, _S, Vt = np.linalg.svd(np.array([segs[i][1] for i in keep]).T @ np.array([segs[i][2] for i in keep]))
+        D = np.eye(3)
+        D[2, 2] = np.sign(np.linalg.det(U @ Vt))
+        R = U @ D @ Vt
+        ang = [angle_deg(a, R @ b) for _pr, a, b in segs]
+        worst = max(keep, key=lambda i: ang[i])
+        if ang[worst] <= tol or len(keep) - 1 <= len(segs) // 2:
+            return R, ang
+        keep.remove(worst)
+
+
+def bind_off_rest(heads, rb, order, P0, tol=BIND_TOL_DEG):
+    """Degrees each bone's bind direction sits off its rest direction, frame
+    free: `heads` is {rest.json name: bind origin} in any frame and unit, and
+    its directions are rotated onto the rest's by `trimmed_fit`. Each bone
+    keeps its largest angle over its children; a bone with no measured child
+    is left out. Directions only: a bone rolled about its own length is not
+    seen."""
+    segs = segments(P0, heads, rb, order)
+    if not segs:
+        return {}
+    _R, ang = trimmed_fit(segs, tol)
+    off = {}
+    for (pr, _a, _b), deg in zip(segs, ang):
+        off[pr] = max(off.get(pr, 0.0), deg)
+    return off
+
+
+def frame_turn(rig_heads, clip_heads, rb, order, tol=BIND_TOL_DEG):
+    """How far the --bind-from file's world is turned from the clip's, or None
+    when it is not. The rig's bone directions are fitted onto the clip bind's;
+    the files are in different world frames when that fit turns by more than
+    `tol` AND at least half the bones agree after it, more of them than agree
+    unturned (a skeleton that matches only once turned). A clip whose bind is
+    posed far from the rest everywhere (no half agrees either way) cannot tell
+    a turned file from its own pose and is not refused. Returns (degrees,
+    bones agreeing after the turn, bones measured)."""
+    segs = segments(clip_heads, rig_heads, rb, order)
+    if not segs:
+        return None
+    R, ang = trimmed_fit(segs, tol)
+    turn = math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(R) - 1) / 2))))
+    fitted = sum(1 for d in ang if d <= tol)
+    unturned = sum(1 for _pr, a, b in segs if angle_deg(a, b) <= tol)
+    if turn > tol and 2 * fitted >= len(segs) and fitted > unturned:
+        return turn, fitted, len(segs)
+    return None
+
+
+def over(offsets, tol=BIND_TOL_DEG):
+    """The bones over `tol`, worst first, as {bone: degrees rounded to 0.1}."""
+    return {n: round(d, 1) for n, d in sorted(offsets.items(), key=lambda kv: -kv[1]) if d > tol}
+
+
+def listed(offsets):
+    return ", ".join(f"{n} {d:0.1f} deg" for n, d in offsets.items())
+
+
+def leg_length(heads):
+    """Hip joint -> knee -> ankle on both sides, from bone origins."""
+    return sum(float(np.linalg.norm(np.asarray(heads[side + b]) - np.asarray(heads[side + a])))
+               for side in ("Left", "Right") for a, b in (("UpperLeg", "LowerLeg"), ("LowerLeg", "Foot")))
+
+
+def rename_to_r15(arm):
+    """The Meshy->R15 bone rename/merge (`--rename`), on `arm` in place."""
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.mode_set(mode="EDIT")
+    eb = arm.data.edit_bones
+    # Normalize FIRST, as rig_r15.py does: a Tripo `spec=mixamo` skeleton
+    # spells the same bones `mixamorig:Spine1` / `mixamorig:Spine2`, which
+    # match no RENAME/MERGE key as shipped.
+    for b in list(eb):
+        b.name = normalize(b.name)
+    for old, new in RENAME.items():
+        if old in eb:
+            eb[old].name = new
+    for old, _t in MERGE:
+        if old in eb:
+            b = eb[old]
+            for child in list(b.children):
+                child.parent = b.parent
+            eb.remove(b)
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def bind_armature(path, names, rename=False):
+    """The bind of the armature in `path` (a rig fbx or glb): per bone in
+    `names` its world bind rotation and origin, read in the same Blender world
+    the clip was imported into. `rename` puts its bones through the same
+    rename/merge the clip took. The import cannot move the clip's timing: the
+    scene's frame rate and range are put back as they were."""
+    sc = bpy.context.scene
+    kept = (sc.render.fps, sc.render.fps_base, sc.frame_start, sc.frame_end, sc.frame_current)
+    before = set(bpy.data.objects)
+    if path.lower().endswith((".glb", ".gltf")):
+        bpy.ops.import_scene.gltf(filepath=path)
+    else:
+        bpy.ops.import_scene.fbx(filepath=path)
+    sc.render.fps, sc.render.fps_base, sc.frame_start, sc.frame_end, _cur = kept
+    sc.frame_set(kept[4])
+    rig = next((o for o in bpy.data.objects if o not in before and o.type == "ARMATURE"), None)
+    if rig is None:
+        raise ValueError(f"--bind-from={path}: no armature in it")
+    if rename:
+        rename_to_r15(rig)
+    missing = [n for n in names if n not in rig.data.bones]
+    if missing:
+        raise ValueError(f"--bind-from={path}: armature lacks bones {missing}")
+    _u, _s, _vt = np.linalg.svd(np.array(mat9(rig.matrix_world))[:3, :3])
+    AW = _u @ _vt
+    Bw = {n: AW @ np.array(mat9(rig.data.bones[n].matrix_local))[:3, :3] for n in names}
+    heads = {n: np.array((rig.matrix_world @ rig.data.bones[n].matrix_local).translation) for n in names}
+    return Bw, heads
+
+
+# A non-root bone whose translation moves it less than this fraction of the
+# rig's leg chain is treated as not translated (float noise in a location key).
+DROPPED_TRANSLATION_TOL = 0.001
+
 
 def ground_lows(rig_mesh, clip_arm, rb, order, Rw, Pw, poses):
     """Lowest skinned vertex height (rig frame, studs) per frame, for the ground
@@ -153,31 +369,33 @@ def ground_lows(rig_mesh, clip_arm, rb, order, Rw, Pw, poses):
     and origin with no root motion. The rig glb is imported beside the clip,
     its armature's R15 bone heads are fitted to rest.json's rest origins by a
     similarity (scale, rotation, offset), and the mesh is skinned per frame
-    with its own weights: v' = sum_b w_b (W_b Rw_b^T (v - P0_b) + P_b)."""
+    with its own weights: v' = sum_b w_b (W_b Rw_b^T (v - P0_b) + P_b). Every
+    skinned mesh parented to the armature is read: a multi-mesh rig can list a
+    head or accessory mesh first, and the soles are wherever they are."""
     before = set(bpy.data.objects)
     bpy.ops.import_scene.gltf(filepath=rig_mesh)
     new = [o for o in bpy.data.objects if o not in before]
     rig = next((o for o in new if o.type == "ARMATURE"), None)
-    mesh = next((o for o in new if o.type == "MESH" and o.parent is rig and o.vertex_groups), None)
-    if rig is None or mesh is None:
+    meshes = [o for o in new if o.type == "MESH" and o.parent is rig and o.vertex_groups] if rig else []
+    if rig is None or not meshes:
         raise ValueError(f"--rig-mesh={rig_mesh}: no armature with a skinned mesh in it")
     missing = [n for n in order if n not in rig.data.bones]
     if missing:
         raise ValueError(f"--rig-mesh={rig_mesh}: armature lacks bones {missing}")
     rig.data.pose_position = "REST"
     bpy.context.view_layer.update()
-    ev = mesh.evaluated_get(bpy.context.evaluated_depsgraph_get())
-    me = ev.to_mesh()
-    co = np.empty(len(me.vertices) * 3)
-    me.vertices.foreach_get("co", co)
-    mw = np.array(ev.matrix_world)
-    ev.to_mesh_clear()
-    V = co.reshape(-1, 3) @ mw[:3, :3].T + mw[:3, 3]
+    parts = []
+    for mesh in meshes:
+        ev = mesh.evaluated_get(bpy.context.evaluated_depsgraph_get())
+        me = ev.to_mesh()
+        co = np.empty(len(me.vertices) * 3)
+        me.vertices.foreach_get("co", co)
+        mw = np.array(ev.matrix_world)
+        ev.to_mesh_clear()
+        parts.append(co.reshape(-1, 3) @ mw[:3, :3].T + mw[:3, 3])
+    V = np.concatenate(parts)
     # rest origins in the rig frame, and the same bones' heads in Blender world
-    P0 = {}
-    for n in order:
-        pr = rb[n]["parent"]
-        P0[n] = P0.get(pr, np.zeros(3)) + Rw.get(pr, np.eye(3)) @ Pw[n]
+    P0 = rest_origins(rb, order, Rw, Pw)
     src = np.array([P0[n] for n in order])
     dst = np.array([list(rig.matrix_world @ rig.data.bones[n].head_local) for n in order])
     ms, md = src.mean(0), dst.mean(0)
@@ -200,13 +418,16 @@ def ground_lows(rig_mesh, clip_arm, rb, order, Rw, Pw, poses):
         raise ValueError(f"--rig-mesh={rig_mesh} does not fit rest.json: a bone origin is {fit_err:0.3f} studs off "
                          f"(tolerance {tol:0.3f}); pass the skinned glb of the rig rest.json was dumped from")
     Wt = np.zeros((len(Vr), len(order)))
-    gi = {g.index: g.name for g in mesh.vertex_groups}
     col = {n: i for i, n in enumerate(order)}
-    for v in mesh.data.vertices:
-        for ge in v.groups:
-            c = col.get(gi[ge.group])
-            if c is not None:
-                Wt[v.index, c] += ge.weight
+    base = 0
+    for mesh, part in zip(meshes, parts):
+        gi = {g.index: g.name for g in mesh.vertex_groups}
+        for v in mesh.data.vertices:
+            for ge in v.groups:
+                c = col.get(gi[ge.group])
+                if c is not None:
+                    Wt[base + v.index, c] += ge.weight
+        base += len(part)
     keep = Wt.sum(1) > 0
     Vr, Wt = Vr[keep], Wt[keep] / Wt[keep].sum(1, keepdims=True)
     rest_low = float(Vr[:, 1].min())
@@ -220,7 +441,7 @@ def ground_lows(rig_mesh, clip_arm, rb, order, Rw, Pw, poses):
         lows.append(float(y.min()))
     info = {"rig_mesh": os.path.basename(rig_mesh), "fit_err_studs": round(fit_err, 5),
             "tolerance_studs": round(tol, 5), "studs_per_unit": round(1 / s, 5),
-            "vertices": int(len(Vr)), "rest_low": round(rest_low, 5)}
+            "vertices": int(len(Vr)), "meshes": len(meshes), "rest_low": round(rest_low, 5)}
     return lows, info
 
 
@@ -272,6 +493,14 @@ def main():
             raise ValueError("--root-y=ground with --no-root: a rotation-only doc has no root motion to lock")
         if not rig_mesh:
             raise ValueError("--root-y=ground needs --rig-mesh=<the rig's skinned glb>")
+    # The bind the transfer measures from: the clip file's own, or the rig
+    # file's (a clip authored on the rig and exported with another pose as its
+    # bind). Only a clip on the rig's own skeleton can take the rig's bind.
+    bind_from = next((a.split("=", 1)[1] for a in argv if a.startswith("--bind-from=")), None)
+    if bind_from and (do_mixamo or do_ual):
+        raise ValueError(f"--bind-from with {'--mixamo' if do_mixamo else '--ual'}: that clip is on another "
+                         "skeleton, and the transfer re-rests onto its own bind; --bind-from is for a clip "
+                         "authored on the rig's skeleton")
     trim = next((a.split("=", 1)[1] for a in argv if a.startswith("--trim=")), None)
     if trim is not None:
         t_start, t_end = (float(v) for v in trim.split(":"))
@@ -293,24 +522,7 @@ def main():
     arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
 
     if do_rename:
-        bpy.context.view_layer.objects.active = arm
-        bpy.ops.object.mode_set(mode="EDIT")
-        eb = arm.data.edit_bones
-        # Normalize FIRST, as rig_r15.py does: a Tripo `spec=mixamo` skeleton
-        # spells the same bones `mixamorig:Spine1` / `mixamorig:Spine2`, which
-        # match no RENAME/MERGE key as shipped.
-        for b in list(eb):
-            b.name = normalize(b.name)
-        for old, new in RENAME.items():
-            if old in eb:
-                eb[old].name = new
-        for old, _t in MERGE:
-            if old in eb:
-                b = eb[old]
-                for child in list(b.children):
-                    child.parent = b.parent
-                eb.remove(b)
-        bpy.ops.object.mode_set(mode="OBJECT")
+        rename_to_r15(arm)
 
     if action_name is not None:
         act = bpy.data.actions[action_name]
@@ -324,29 +536,55 @@ def main():
         print(f"selected action {action_name}")
 
     rb = json.load(open(rest_path))
-    names = list(rb.keys())
     prefix = ""
+    mode = "names"
     if do_mixamo:
         prefix = next((b.name[: -len("Hips")] for b in arm.data.bones if b.name.endswith(":Hips")), "")
-        src = {n: prefix + MIXAMO_MAP[n] for n in names}
+        mode = "mixamo"
         print(f"mixamo mode, bone prefix '{prefix}'")
     elif do_ual:
-        src = {n: UAL_MAP[n] for n in names}
+        mode = "ual"
         print("ual mode (Rigify DEF- skeleton)")
-    else:
-        src = {n: n for n in names}
-    missing = [n for n in names if src[n] not in arm.data.bones]
-    assert not missing, f"clip lacks bones: {missing}"
+    # The rest dump carries every bone of the rig, the fifteen R15 ones and any
+    # extra bones (wings, a jaw, cloth). A clip must drive every R15 bone; an
+    # extra bone it does not key is HELD: posed at its rest, following its
+    # parent, and left out of the frames (kfs.write leaves it out of the
+    # sequence unless it must stay as a structural node, so lower-priority
+    # tracks keep its joint), so a clip library authored without those bones
+    # still plays.
+    src, held = clip_bone_map(list(rb.keys()), [b.name for b in arm.data.bones], mode=mode, prefix=prefix)
+    names = list(src)
+    if held:
+        print(f"held at rest (the clip does not key them): {held}")
+    translate = next((a.split("=", 1)[1] for a in argv if a.startswith("--translate=")), "")
+    translate = [b for b in translate.split(",") if b]
+    for b in translate:
+        if b not in rb:
+            raise ValueError(f"--translate: {b} is not in rest.json (bones: {', '.join(sorted(rb))})")
+        if rb[b]["parent"] == "HumanoidRootPart":
+            raise ValueError(f"--translate: {b} is a root bone; its translation is the root motion")
+        if b not in src:
+            raise ValueError(f"--translate: {b} is held at rest (the clip does not key it), so it has no translation")
+        # a named bone's translation is measured from its clip parent's frame
+        if arm.pose.bones[src[b]].parent is None:
+            raise ValueError(f"--translate: {b} ({src[b]} in the clip) has no parent bone in the clip, "
+                             "so it has no rest offset to measure a translation from")
 
     kids = {}
     for n, d in rb.items():
         kids.setdefault(d["parent"], []).append(n)
     order = []
-    stack = ["LowerTorso"]
+    # every bone hanging off the root part, not only LowerTorso: an extra bone
+    # parented to the root node would otherwise never be posed
+    stack = sorted(kids.get("HumanoidRootPart", []), reverse=True)
     while stack:
         n = stack.pop()
         order.append(n)
         stack.extend(kids.get(n, []))
+    unreached = sorted(set(rb) - set(order))
+    if unreached:
+        # the transfer walks the chain from the root part: these get no track at all
+        print(f"warning: rest.json bones not reached from HumanoidRootPart get no track: {', '.join(unreached)}")
 
     # Roblox world rests (HRP frame)
     Rw = {}
@@ -370,6 +608,58 @@ def main():
     # every singular value is 1 within 1e-6); only the POSE matrices need
     # rotation_part
     Bw = {n: AW @ np.array(mat9(arm.data.bones[src[n]].matrix_local))[:3, :3] for n in names}
+    AWfull = arm.matrix_world
+    clip_heads = {n: np.array((AWfull @ arm.data.bones[src[n]].matrix_local).translation) for n in names}
+    Pw = {n: np.array(rb[n]["pos"]) for n in order}
+    P0 = rest_origins(rb, order, Rw, Pw)
+    # The analytic axis map (a native Mixamo or Rigify skeleton with a toe
+    # bone) re-rests every bone onto the clip's own bind; every other clip
+    # takes the empirical branch, which transfers deltas from the bind as-is
+    # and so needs the bind to be the rig's rest.
+    toe_name = (prefix + "LeftToeBase") if do_mixamo else ("DEF-toe.L" if do_ual else None)
+    toe = arm.data.bones.get(toe_name) if toe_name is not None else None
+    bind_mismatch = {}
+    rig_hips = None
+    hips_offset = None
+    if bind_from and bind_from != "clip":
+        rig_Bw, rig_heads = bind_armature(bind_from, names, rename=do_rename)
+        rig_off = over(bind_off_rest(rig_heads, rb, order, P0))
+        if rig_off:
+            raise ValueError(f"--bind-from={bind_from} is not the rig rest.json was dumped from: its bind is off "
+                             f"rest.json by more than {BIND_TOL_DEG} deg at {listed(rig_off)}")
+        turned = frame_turn(rig_heads, clip_heads, rb, order)
+        if turned:
+            raise ValueError(f"--bind-from={bind_from} is in another world frame than the clip: its skeleton matches "
+                             f"the clip's bind only after a {turned[0]:0.1f} deg turn ({turned[1]} of {turned[2]} "
+                             "bones), and its bind would flip every frame; pass the file of the skeleton the clip was "
+                             "authored against, exported in the clip's world")
+        rig_leg_len, clip_leg_len = leg_length(rig_heads), leg_length(clip_heads)
+        if not abs(rig_leg_len - clip_leg_len) <= BIND_LEG_TOL * clip_leg_len:
+            raise ValueError(f"--bind-from={bind_from}: its leg chain is {rig_leg_len:0.4f} units and the clip's "
+                             f"{clip_leg_len:0.4f}; pass the rig file at the clip's scale")
+        bind_mismatch = over({n: math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(Bw[n] @ rig_Bw[n].T) - 1) / 2))))
+                              for n in names})
+        if bind_mismatch:
+            print(f"the clip's own bind is off the rig's by more than {BIND_TOL_DEG} deg at {listed(bind_mismatch)}; "
+                  f"transferring from the rig's bind ({os.path.basename(bind_from)})")
+        Bw = rig_Bw
+        rig_hips = rig_heads["LowerTorso"]
+        # A file placed elsewhere in the world, or a clip whose bind is itself
+        # displaced (a flying pose), moves the `bind` root reference by the
+        # same vector; the two cannot be told apart, so the distance is
+        # reported rather than refused. The `first` reference does not read it.
+        hips_offset = float(np.linalg.norm(clip_heads["LowerTorso"] - rig_hips))
+    elif toe is None:
+        clip_off = over(bind_off_rest(clip_heads, rb, order, P0))
+        if clip_off and bind_from != "clip":
+            raise ValueError(f"the clip's bind pose is off the rig's rest (rest.json) by more than {BIND_TOL_DEG} deg "
+                             f"at {listed(clip_off)}; every frame would transfer wrong by that difference. Pass "
+                             "--bind-from=<the fbx or glb of the skeleton the clip was authored on, in its rest>, "
+                             "or --bind-from=clip to transfer from the clip's own bind anyway")
+        if clip_off:
+            print(f"the clip's own bind is off the rig's rest by more than {BIND_TOL_DEG} deg at {listed(clip_off)}; "
+                  "transferring from it as asked (--bind-from=clip)")
+        bind_mismatch = clip_off
     act = arm.animation_data.action
     f0, f1 = act.frame_range
     fps = bpy.context.scene.render.fps
@@ -389,24 +679,36 @@ def main():
         times = [round(t - base, 6) for _f, t in keep]
         print(f"trimmed to source frames {fnums[0]}..{fnums[-1]} ({len(fnums)} frames, {times[-1]:0.3f}s)")
     frames = []
+    # per frame, each non-root bone's own translation: its head's displacement
+    # (clip world, clip units) from where its parent's animated frame puts it
+    # at rest; zero for a bone the clip only rotates
+    moves = []
+    # each such bone's rest offset in its clip parent's frame
+    offsets = {n: (pb.parent.bone.matrix_local.inverted() @ pb.bone.matrix_local).translation
+               for n in names for pb in (arm.pose.bones[src[n]],)
+               if rb[n]["parent"] != "HumanoidRootPart" and pb.parent is not None}
     for f, t in zip(fnums, times):
         bpy.context.scene.frame_set(f)
-        A = {}
+        A, D = {}, {}
         for n in names:
-            pm = arm.pose.bones[src[n]].matrix
+            pb = arm.pose.bones[src[n]]
+            pm = pb.matrix
             A[n] = AW @ rotation_part(np.array(mat9(pm))[:3, :3])
+            if n in offsets:
+                at_rest = AWfull @ (pb.parent.matrix @ offsets[n])
+                D[n] = np.array(AWfull @ pm.translation) - np.array(at_rest)
         frames.append((t, A))
+        moves.append(D)
 
     # pick g by foot-trajectory fidelity vs the authored clip
     # authored foot ranges, measured in WORLD frame: X lateral, Y forward
     # (Mixamo faces -Y in Blender world), Z up
-    AWfull = arm.matrix_world
     fl, ff, fh = [], [], []
     # hips world position per frame (clip units, Blender world frame) and at
-    # the bind pose: their difference is the root motion the transfer carries
+    # the bind pose (the rig's with --bind-from): their difference is the root
+    # motion the transfer carries
     hips = []
-    rest_hips_m = AWfull @ arm.data.bones[src["LowerTorso"]].matrix_local
-    rest_hips = np.array([rest_hips_m[0][3], rest_hips_m[1][3], rest_hips_m[2][3]])
+    rest_hips = rig_hips if rig_hips is not None else clip_heads["LowerTorso"]
     for f_, _A in enumerate(frames):
         bpy.context.scene.frame_set(fnums[f_])
         wp = AWfull @ arm.pose.bones[src["LeftFoot"]].matrix
@@ -437,10 +739,7 @@ def main():
     # (witnessed 2026-09-23: a death's 0.84-unit hip drop moved 47 studs where
     # the rig-to-clip scale, 41.2 studs a unit by a fit of the rig mesh, gives
     # 34.5; the leg ratio gives 41.15).
-    def _leg(pos):
-        return sum(float(np.linalg.norm(pos[side + b] - pos[side + a]))
-                   for side in ("Left", "Right") for a, b in (("UpperLeg", "LowerLeg"), ("LowerLeg", "Foot")))
-    clip_leg = _leg({n: np.array((AWfull @ arm.data.bones[src[n]].matrix_local).translation) for n in names})
+    clip_leg = leg_length(clip_heads)
 
     # all 24 proper axis-aligned rotations (signed permutation matrices,
     # det +1): the 5-candidate shortlist missed the right frame on the
@@ -454,15 +753,14 @@ def main():
                 M[row, col] = s
             if np.linalg.det(M) > 0.5:
                 CANDS[f"p{perm}s{signs}"] = M
-    Pw = {}
-    for n in order:
-        pr = rb[n]["parent"]
-        Pw[n] = np.array(rb[n]["pos"])
     # the rig's leg bones in its rest: a bone's pos is its offset from the parent
     rig_leg = sum(float(np.linalg.norm(Pw[side + b])) for side in ("Left", "Right") for b in ("LowerLeg", "Foot"))
     if clip_leg <= 1e-9 or rig_leg <= 1e-9:
         raise ValueError(f"leg chain has no length (clip {clip_leg}, rig {rig_leg}): cannot scale root motion")
     k = rig_leg / clip_leg
+    if hips_offset is not None:
+        print(f"the rig's bind hips sit {hips_offset * k:0.3f} studs from the clip bind's; --root-ref=bind measures "
+              "root motion from the rig's")
     print(f"k = {k:0.4f} studs per clip unit (leg chain: rig {rig_leg:0.3f} studs, clip {clip_leg:0.4f} units)")
     def min_rot(a, b):
         """Smallest rotation matrix taking unit-ish vector a onto b."""
@@ -482,14 +780,21 @@ def main():
         K = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
         return np.eye(3) + K + K @ K * ((1 - c) / (s * s))
 
+    def _world(n, pr, A, W, g, F):
+        """Bone `n`'s rig-frame world rotation this frame: the transferred
+        clip delta on its rest, or, for a held bone, its parent's world
+        rotation times its own rest local (it rides its parent unchanged)."""
+        if n in src:
+            return (g @ (A[n] @ Bw[n].T) @ g.T) @ F[n] @ Rw[n]
+        return W.get(pr, np.eye(3)) @ m3(rb[n]["rot"])
+
     def foot_traj(g, F):
         lx, fz, hy = [], [], []
         for _t, A in frames:
             W, WP = {}, {}
             for n in order:
                 pr = rb[n]["parent"]
-                delta = g @ (A[n] @ Bw[n].T) @ g.T
-                W[n] = delta @ F[n] @ Rw[n]
+                W[n] = _world(n, pr, A, W, g, F)
                 WP[n] = WP.get(pr, np.zeros(3)) + (W.get(pr, np.eye(3)) @ Pw[n])
             lx.append(WP["LeftFoot"][0])
             hy.append(WP["LeftFoot"][1])
@@ -498,8 +803,6 @@ def main():
 
     ID_F = {n: np.eye(3) for n in names}
     yhat = np.array([0.0, 1.0, 0.0])
-    toe_name = (prefix + "LeftToeBase") if do_mixamo else ("DEF-toe.L" if do_ual else None)
-    toe = arm.data.bones.get(toe_name) if toe_name is not None else None
     print(f"truth (rig units): lateral={truth_lat*k:5.2f} forward={truth_fwd*k:5.2f} height={truth_h*k:5.2f}")
     if toe is not None:
         # ANALYTIC g: the conversion is fully determined, no search — it must
@@ -525,8 +828,9 @@ def main():
         lx, fz, hy = foot_traj(g, F)
         print(f"analytic g (clip faces {tuple(round(c, 2) for c in f)}): lateral={max(lx)-min(lx):5.2f} forward={max(fz)-min(fz):5.2f} height={max(hy)-min(hy):5.2f} hcorr={corr(hy, fh):+0.2f} fcorr={abs(corr(fz, ff)):0.2f}")
     else:
-        # no toe bone to measure facing (Meshy/own-rig clips; rests match, F
-        # stays identity): empirical search over the 24 axis-aligned frames
+        # no toe bone to measure facing (Meshy/own-rig clips; the bind is the
+        # rig's rest, checked above or taken from --bind-from, so F stays
+        # identity): empirical search over the 24 axis-aligned frames
         best, bestScore = None, math.inf
         scored = []
         for gname, gc in CANDS.items():
@@ -568,21 +872,39 @@ def main():
     # vertical is known: root motion shifts every bone by the same vector, so
     # it can be added after the fact.
     roots = [n for n in order if rb[n]["parent"] == "HumanoidRootPart"]
+    # a non-root bone the clip translates but --translate does not name: its
+    # largest displacement in studs, reported as dropped
+    dropped = {}
+    for D in moves:
+        for n, d in D.items():
+            if n not in translate:
+                dropped[n] = max(dropped.get(n, 0.0), k * float(np.linalg.norm(d)))
+    dropped = {n: v for n, v in dropped.items() if v > DROPPED_TRANSLATION_TOL * rig_leg}
+    for n in sorted(dropped):
+        print(f"translation dropped on {n} (up to {dropped[n]:0.3f} studs); --translate={n} carries it")
     per_frame = []
     for fi, (t, A) in enumerate(frames):
-        W, WPr, p = {}, {}, {}
+        W, WPr, p, tr = {}, {}, {}, {}
         for n in order:
             pr = rb[n]["parent"]
-            delta = g @ (A[n] @ Bw[n].T) @ g.T
-            W[n] = delta @ F[n] @ Rw[n]
+            W[n] = _world(n, pr, A, W, g, F)
             Wp = W.get(pr, np.eye(3))
             # same accumulation foot_traj scores with, kept for every bone so the
             # hand chains resolve too: rig-frame position of each bone's origin
             WPr[n] = WPr.get(pr, np.zeros(3)) + (Wp @ Pw[n])
-            p[n] = [round(v, 5) for v in quat(m3(rb[n]["rot"]).T @ Wp.T @ W[n])]
+            if n in src:
+                p[n] = [round(v, 5) for v in quat(m3(rb[n]["rot"]).T @ Wp.T @ W[n])]
+            if n in translate:
+                # the bone's own translation, mapped and scaled like the root
+                # motion, then expressed in its rest frame under the parent's
+                # transferred rotation (where the Animator applies a Pose
+                # position); its children ride along
+                d = k * (g @ moves[fi].get(n, np.zeros(3)))
+                WPr[n] = WPr[n] + d
+                tr[n] = [round(float(v), 4) for v in m3(rb[n]["rot"]).T @ Wp.T @ d]
         # root motion: hips delta from the reference, mapped into the rig frame
         # by the same g the rotations use and scaled to studs by k
-        per_frame.append((t, W, WPr, p, k * (g @ (hips[fi] - rest_hips))))
+        per_frame.append((t, W, WPr, p, k * (g @ (hips[fi] - rest_hips)), tr))
     ground = None
     if emit_root and root_y == "ground":
         # Ground lock: the vertical root offset puts the rig's lowest skinned
@@ -592,13 +914,15 @@ def main():
         # their own bind (a walk's lowest foot swings 8 studs under and 4 over
         # it, a death sinks 14, an idle with a keyed hips scale hovers 3-4),
         # and the rig drops the clip's toe joints (witnessed 2026-09-23).
-        low, ground = ground_lows(rig_mesh, arm, rb, order, Rw, Pw, [(W, WPr) for _t, W, WPr, _p, _h in per_frame])
+        low, ground = ground_lows(rig_mesh, arm, rb, order, Rw, Pw, [(W, WPr) for _t, W, WPr, _p, _h, _tr in per_frame])
     jframes = []
     traj = {n: [] for n in TRAJ_BONES}
     root_range = np.zeros(3)
-    for fi, (t, W, WPr, p, hdelta) in enumerate(per_frame):
+    for fi, (t, W, WPr, p, hdelta, tr) in enumerate(per_frame):
         droot = np.zeros(3)
         frame_doc = {"t": round(t, 4), "p": p}
+        if tr:
+            frame_doc["r"] = dict(tr)
         if emit_root:
             droot = hdelta.copy()
             if ground is not None:
@@ -608,7 +932,8 @@ def main():
             # Bone.Transform). The HumanoidRootPart itself never moves: the
             # rig's physics box keeps standing, the mesh crouches, kneels or
             # lies down inside it.
-            frame_doc["r"] = {n: [round(float(v), 4) for v in m3(rb[n]["rot"]).T @ droot] for n in roots}
+            frame_doc.setdefault("r", {}).update(
+                {n: [round(float(v), 4) for v in m3(rb[n]["rot"]).T @ droot] for n in roots})
             root_range = np.maximum(root_range, np.abs(droot))
         jframes.append(frame_doc)
         for n in TRAJ_BONES:
@@ -620,7 +945,11 @@ def main():
            "root_motion": bool(emit_root), "root_ref": root_ref, "g": g_name, "g_forced": forced_g is not None,
            "root_range_studs": [round(float(v), 3) for v in root_range],
            "k": round(float(k), 5), "k_source": "leg_chain",
-           "root_y": root_y if emit_root else None, "ground": ground,
+           "root_y": root_y if emit_root else None, "ground": ground, "held": held,
+           "bind_from": (bind_from if bind_from == "clip" else os.path.basename(bind_from)) if bind_from else None,
+           "bind_mismatch_deg": bind_mismatch, "bind_tolerance_deg": BIND_TOL_DEG,
+           "bind_hips_offset_studs": round(hips_offset * k, 4) if hips_offset is not None else None,
+           "translate": sorted(translate), "translation_dropped": {n: round(v, 4) for n, v in sorted(dropped.items())},
            "trim": [t_start, t_end] if trim is not None else None}
     if emit_root:
         print(f"root motion: max |hips delta| xyz {[round(float(v), 2) for v in root_range]} studs")

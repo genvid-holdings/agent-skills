@@ -7,18 +7,26 @@ local model = {{MODEL_PATH}}
 local scale = tonumber("{{SCALE}}") or 1
 local height = tonumber("{{HEIGHT}}")
 assert(height and height > 0, "groundfit needs the character's height in studs ({{HEIGHT}})")
-local mesh = model:FindFirstChildWhichIsA("MeshPart", true)
-assert(mesh, "no MeshPart")
+local meshes = {}
+for _, d in model:GetDescendants() do if d:IsA("MeshPart") then table.insert(meshes, d) end end
+assert(#meshes > 0, "no MeshPart")
 local bones = {}
 for _, d in model:GetDescendants() do if d:IsA("Bone") then bones[d.Name] = d end end
 local lower, upper = bones.LowerTorso, bones.UpperTorso
 assert(lower and upper, "LowerTorso/UpperTorso missing")
--- feet plane = lowest vertex of the raw mesh in world space (bones sit at ankles, not soles)
-local em = AssetService:CreateEditableMeshAsync(Content.fromAssetId(tonumber(mesh.MeshId:match("%d+"))))
-local minY = math.huge
-for _, vid in em:GetVertices() do
-	local p = mesh.CFrame:PointToWorldSpace(em:GetPosition(vid) * mesh.Size / mesh.MeshSize)
-	if p.Y < minY then minY = p.Y end
+-- feet plane = lowest vertex in world space (bones sit at ankles, not soles),
+-- over EVERY MeshPart: a multi-mesh import can list a small accessory mesh
+-- first, and whatever geometry is lowest is what meets the ground.
+local minY, feetMesh = math.huge, nil
+for _, mesh in meshes do
+	local id = tonumber(mesh.MeshId:match("%d+"))
+	assert(id, "MeshPart " .. mesh:GetFullName() .. " has no MeshId; the feet plane cannot be measured without it")
+	local em = AssetService:CreateEditableMeshAsync(Content.fromAssetId(id))
+	for _, vid in em:GetVertices() do
+		local p = mesh.CFrame:PointToWorldSpace(em:GetPosition(vid) * mesh.Size / mesh.MeshSize)
+		if p.Y < minY then minY, feetMesh = p.Y, mesh.Name end
+	end
+	em:Destroy()
 end
 local lt, ut = lower.WorldPosition, upper.WorldPosition
 -- HumanoidRootPart size from BODY HEIGHT, not from spine spacing. The bone gap
@@ -75,6 +83,7 @@ look.Weight = 0.6
 -- Returned as well as printed: execute_luau hands back the chunk's return
 -- value, not its console output.
 local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ hipHeight = hip, feetPlane = minY,
+	feetMesh = feetMesh, meshCount = #meshes,
 	rootSize = { rootSize.X, rootSize.Y, rootSize.Z }, lowerTorsoY = lt.Y, upperTorsoY = ut.Y,
 	soleOffset = sole, soleOffsetAttribute = model:GetAttribute("{{SOLE_ATTR}}"),
 	targetHeight = height,

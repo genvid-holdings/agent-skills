@@ -142,6 +142,11 @@ BENCH_GATES = {
 # A catalog clip's class is here; a declared key's is its declaration's
 # `motion`; anything else is in_place, the strictest.
 MOTIONS = ("in_place", "travel", "fall")
+# E13's gate: the rest pose's lowest vertex within this many studs of the plane
+# with the rig stood at its measured settled height. The ground-fit settle
+# loop's verification (studio.SETTLE_VERIFY_TOL) reads the same gap at the root
+# and uses this number, so the loop never verifies a fit this row fails.
+E13_GAP_TOL = 0.5
 CATALOG_MOTION = {"Walk": "travel", "Death": "fall"}
 BRANDS = ("mixamo", "meshy", "quaternius", "tripo", "cascadeur")
 
@@ -405,8 +410,34 @@ def _probe_gap(ctx, lod, require_play=False):
     return probe.get("gap")
 
 
+def _verification_miss(ctx):
+    miss = _dig(ctx.m, "stages.groundfit.verification_miss")
+    return miss if isinstance(miss, dict) and _is_number(miss.get("gap")) else None
+
+
 def _row_E13(ctx):
+    """The close-LOD probe's gap, or the ground-fit settle's recorded miss.
+
+    A verification settle that missed the sole offset stops the loop at ingest
+    (studio.SETTLE_VERIFY_TOL), and probe_feet then has no measured height to
+    stand the rig at. The miss is the same gap read at the root, so the row
+    scores it rather than reading PEND; a later verified settle clears it."""
+    miss = _verification_miss(ctx)
+    if miss is not None:
+        return miss["gap"]
     return _probe_gap(ctx, "close")
+
+
+def _row_E13_readings(ctx):
+    """Both numbers behind a recorded settle miss, or None (no readings block)."""
+    miss = _verification_miss(ctx)
+    if miss is None:
+        return None
+    height = float(ctx.m["height_studs"])
+    bottom, sole = miss.get("settledBottom"), miss.get("soleOffset")
+    return {"settled_bottom": bottom, "settled_bottom_frac": None if bottom is None else bottom / height,
+            "sole_offset": sole, "sole_offset_frac": None if sole is None else sole / height,
+            "gated": None}
 
 
 def _row_E14(ctx):
@@ -808,8 +839,12 @@ def _wire_all_true(v):
     # result predating them contributes no check for them rather than a false
     # PASS on a key that is not there; the keys are present on every result the
     # current wire.luau prints.
+    # noCollidingParts: every part but the HumanoidRootPart read back
+    # non-colliding and massless; an extra colliding part rests on the ground
+    # and holds the body up. singleAssembly: every part's AssemblyRootPart is
+    # the HumanoidRootPart. Same rule for a result that predates them.
     for k in ("primaryAxisCorrect", "automaticScalingDisabled", "fallStatesDisabled",
-              "rigTypeR15", "noAnimationController"):
+              "rigTypeR15", "noAnimationController", "noCollidingParts", "singleAssembly"):
         if k in v:
             checks.append(bool(v[k]))
     return all(checks) if checks else None
@@ -854,7 +889,11 @@ def build_rows(ctx):
             # A row whose value could honestly be read more than one way carries
             # the other readings beside it. They are shown, never scored: `value`
             # and `pass` are unchanged by anything in here.
-            row["readings"] = readings_fn(ctx)
+            # A readings function may return None when it has nothing to show;
+            # the row then carries no readings block at all.
+            readings = readings_fn(ctx)
+            if readings is not None:
+                row["readings"] = readings
         rows.append(row)
 
     add("E1", "plate", "limb gaps", "auto", False, "stages.plate.gaps_ok", _row_E1,
@@ -905,7 +944,9 @@ def build_rows(ctx):
     # close read again (RenderFidelity does not change vertex data, and the pose
     # is held). It was PEND on all three bake-off legs for that reason.
     add("E13", "groundfit", "feet grounded, close LOD", "auto", False, "eval.groundfit.probe_close", _row_E13,
-        _between(-0.5, 0.5), "-0.5 <= gap <= 0.5 studs, at the measured settled HRP height")
+        _between(-E13_GAP_TOL, E13_GAP_TOL),
+        "-%g <= gap <= %g studs, at the measured settled HRP height (or the settle's recorded miss)"
+        % (E13_GAP_TOL, E13_GAP_TOL), readings_fn=_row_E13_readings)
     add("E14", "groundfit", "feet grounded, far LOD", "auto", False, "eval.groundfit.probe_far", _row_E14,
         _between(-1.0, 1.0), "-1.0 <= gap <= 1.0 studs, measured in Play (PEND until the Mesh & Image API is on)")
     add("E15", "clips", "Walk cadence (cycle seconds)", "auto", True, "eval.clips.Walk.cycle_seconds", _row_E15,

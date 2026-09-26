@@ -269,7 +269,10 @@ PUBLISHED_ITEM_KEYS = ("roblox_id", "kfs_name", "registration", "bench")
 # The item's transfer options (and the build's time scale) `bind()` records in
 # the generation params, so two versions of a clip are told apart by more than
 # their titles.
-TRANSFER_OPTION_KEYS = ("root_y", "root_ref", "g", "g_from", "trim", "time_scale", "k")
+TRANSFER_OPTION_KEYS = ("root_y", "root_ref", "g", "g_from", "trim", "time_scale", "k", "translate", "bind_from")
+# The skeleton conventions whose clips are on another skeleton than the rig's:
+# poses.py re-rests them onto their own bind and refuses --bind-from.
+FOREIGN_MODES = ("--mixamo", "--ual")
 
 
 def raw_impact(m, clip):
@@ -315,7 +318,8 @@ def recorded_g(m, clip):
 
 
 def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloads=None, blender=None,
-             g=None, g_from=None, no_root=False, root_ref=None, trim=None, root_y=None, rig_mesh=None):
+             g=None, g_from=None, no_root=False, root_ref=None, trim=None, root_y=None, rig_mesh=None,
+             translate=None, bind_from=None):
     """Run `blender/poses.py` on `candidate` for `clip`; record the result under
     `stages.clips.items[<clip>]` and return the poses JSON path. A generated
     motion's candidate comes from `generated_candidate()`.
@@ -330,7 +334,18 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
     `scaled_seconds` are the trimmed length; `root_y="ground"` locks the
     vertical root motion so the rig's lowest skinned vertex stays on the ground
     every frame (the horizontal still follows `root_ref`), skinning `rig_mesh`
-    (default `stages.rig.artifact_glb`, the rig's glb twin) with the transfer.
+    (default `stages.rig.artifact_glb`, the rig's glb twin) with the transfer;
+    `translate` (bone names) carries those non-root bones' authored translation
+    into their Pose positions, and the item records the bones carried
+    (`translate`) and the translated bones left rotation-only
+    (`translation_dropped`, bone -> studs); `bind_from` is the fbx or glb of
+    the skeleton the clip was authored on, in its rest (the rig's own file),
+    whose bind the transfer measures from instead of the clip file's, or
+    "clip" to transfer from the clip's own bind even where it is off the rig's
+    rest (poses.py refuses that without it). The item records `bind_from`,
+    `bind_mismatch_deg` (bone -> degrees the clip's own bind is off) and
+    `bind_hips_offset_studs` (how far the rig file's hips sit from the clip
+    bind's), and a manifest note names those bones.
 
     The item a re-transfer replaces is appended to
     `stages.clips.superseded[<clip>]` when it carries any of
@@ -357,10 +372,19 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
                              "pass --rig-mesh <the skinned glb of the rig rest.json was dumped from>")
         if not Path(rig_mesh).is_file():
             raise FileNotFoundError("--root-y ground: rig mesh %s is not on disk" % rig_mesh)
+    translate = list(translate or [])
+    if any(not b or "," in b for b in translate) or len(set(translate)) != len(translate):
+        raise ValueError("--translate %r: name each bone once, without commas" % (translate,))
     if g_from:
         g = recorded_g(m, g_from)
     source = candidate["source"]
     mode = candidate.get("mode")
+    if bind_from:
+        if mode in FOREIGN_MODES:
+            raise ValueError("--bind-from with a %s clip: that clip is on another skeleton, which the transfer "
+                             "re-rests onto its own bind" % mode)
+        if bind_from != "clip" and not Path(bind_from).is_file():
+            raise FileNotFoundError("--bind-from: %s is not on disk" % bind_from)
 
     out = Path(m["out_dir"])
     rest_path = Path(rest) if Path(rest).is_absolute() else out / rest
@@ -415,6 +439,10 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
         argv.append("--trim=%s:%s" % trim_range)
     if root_y == "ground":
         argv += ["--root-y=ground", "--rig-mesh=%s" % rig_mesh]
+    if translate:
+        argv.append("--translate=%s" % ",".join(translate))
+    if bind_from:
+        argv.append("--bind-from=%s" % bind_from)
     r = subprocess.run(argv, capture_output=True, text=True)
     # --python-exit-code 1 (as rig.r15() uses): without it Blender exits 0 on a
     # raised exception too, and a stale poses.json from an earlier run would
@@ -454,7 +482,16 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
             "root_motion": poses.get("root_motion", not no_root), "root_ref": poses.get("root_ref", root_ref),
             "root_y": poses.get("root_y", None if no_root else (root_y or "hips")), "k": poses.get("k"),
             "ground": poses.get("ground"),
-            "trim": list(trim_range) if trim_range else None}
+            "trim": list(trim_range) if trim_range else None,
+            "translate": poses.get("translate", []), "translation_dropped": poses.get("translation_dropped", {}),
+            "bind_from": poses.get("bind_from"), "bind_mismatch_deg": poses.get("bind_mismatch_deg", {}),
+            "bind_hips_offset_studs": poses.get("bind_hips_offset_studs")}
+    if item["bind_mismatch_deg"]:
+        manifest.note(m, "clips transfer: %s's own bind is off by more than %s deg at %s; transferred from %s"
+                      % (clip, poses.get("bind_tolerance_deg"),
+                         ", ".join("%s %s deg" % kv for kv in item["bind_mismatch_deg"].items()),
+                         "the clip's own bind as asked" if item["bind_from"] == "clip"
+                         else "the bind of %s" % item["bind_from"]))
     prev = items.get(clip)
     if prev and any(prev.get(k) for k in PUBLISHED_ITEM_KEYS):
         # the replaced item may be a published, registered clip: keep its record
@@ -689,7 +726,8 @@ def build(m, clip, *, anims_dir=None, version=None, name=None, time_scale=None):
     path = _resolve_anims_dir(anims_dir) / ("%s.rbxmx" % name)
     wire = (m["stages"].get("wire") or {}).get("result") or {}
     # the Studio scale step's factor (stages.wire.result.scale, from wire.luau's
-    # ingest) is what the Animator multiplies pose translations by
+    # ingest) is what the Animator multiplies pose translations by, root motion
+    # and --translate bones alike
     root_scale = float(wire.get("scale") or 1.0)
     # An adopted rig records whether it carries the HumanoidRootNode bone
     # (adopt_inspect); a runner-built R15 rig always does (clip transfer law 3).
@@ -706,6 +744,8 @@ def build(m, clip, *, anims_dir=None, version=None, name=None, time_scale=None):
     expected = {"keyframes": len(frames),
                 "last_time": round(max((at(fr["t"]) for fr in frames), default=0.0), 5), "time_scale": effective,
                 "loop": bool(item["loop"]), "priority": item["priority"], "root_node": root_node,
+                # any Pose translation (root motion or a --translate bone) is
+                # multiplied by the model scale, so either one arms the scale check
                 "root_scale": root_scale, "root_motion": any(fr.get("r") for fr in frames)}
     item = {k: v for k, v in item.items() if k != "kfs_verified"}
     # The item's time_scale is what every derived timing reads (timing.clip_time):
@@ -1173,7 +1213,8 @@ def _transfer_cli(x):
     transfer(m, x.clip, candidate, rest=x.rest,
              archive_root=x.archive_root, downloads=x.downloads, blender=x.blender,
              g=x.g, g_from=x.g_from, no_root=x.no_root, root_ref=x.root_ref, trim=x.trim,
-             root_y=x.root_y, rig_mesh=x.rig_mesh)
+             root_y=x.root_y, rig_mesh=x.rig_mesh,
+             translate=[b for b in (x.translate or "").split(",") if b] or None, bind_from=x.bind_from)
 
 
 def _build_cli(x):
@@ -1280,6 +1321,13 @@ def register(sub):
                    help="with --root-y ground: the rig's skinned glb (default stages.rig.artifact_glb)")
     a.add_argument("--trim", default=None, metavar="START:END",
                    help="keep only this range of the source clip (seconds, authored time), re-based to 0")
+    a.add_argument("--translate", default=None, metavar="BONE[,BONE...]",
+                   help="carry these non-root bones' authored translation (a brow or lid the clip slides); "
+                        "every other non-root bone stays rotation-only")
+    a.add_argument("--bind-from", default=None, metavar="RIG_FILE|clip",
+                   help="measure the transfer from the bind of this fbx or glb (the skeleton the clip was authored "
+                        "on, in its rest) instead of the clip file's; `clip` transfers from the clip's own bind "
+                        "even where it is off the rig's rest")
     a.set_defaults(func=_transfer_cli)
 
     b = s.add_parser("build"); b.add_argument("--manifest", required=True)
