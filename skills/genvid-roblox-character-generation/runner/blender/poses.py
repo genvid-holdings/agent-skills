@@ -26,14 +26,19 @@ clip is not measured, and a bone rolled about its own length is not seen. A
 rig file is refused when its bind is off rest.json by more than the tolerance
 (it is not the rig rest.json was dumped from), when its leg chain is not the
 clip's length within 1% (another skeleton or scale: the rest hips would land
-in other units), or when its world is turned from the clip's (`frame_turn`: a
+in other units), or when its world is turned from the clip's (`frame_check`: a
 glb twin exported a half turn from the fbx the clip was authored against
-passes every frame-free check and flips every frame); the bones where the
+passes every frame-free check and flips every frame). That check is printed
+and recorded as `bind_frame`: `aligned`, `inconclusive` (a bind posed off the
+rest on most bones cannot confirm the frame; the transfer continues) or
+`turned` (refused). The bones where the
 clip's own bind differs from the rig file's by more than the tolerance are
 printed. A rig file placed elsewhere in the world moves the `bind` root
 reference, and cannot be told from a clip whose bind is itself displaced (a
 flying pose), so the distance between the two hips is printed and recorded
-(`bind_hips_offset_studs`); the default `first` reference does not read it.
+(`bind_hips_offset_studs`): under `--root-ref=bind` it is a constant offset
+on every frame's root motion, and the default `first` reference does not read
+it.
 Either way the doc records `bind_from` and those bones under
 `bind_mismatch_deg`. The
 flag is refused with `--mixamo` and `--ual`: those clips are on another
@@ -270,18 +275,28 @@ def bind_off_rest(heads, rb, order, P0, tol=BIND_TOL_DEG):
     return off
 
 
-def frame_turn(rig_heads, clip_heads, rb, order, tol=BIND_TOL_DEG):
-    """How far the --bind-from file's world is turned from the clip's, or None
-    when it is not. The rig's bone directions are fitted onto the clip bind's;
-    the files are in different world frames when that fit turns by more than
-    `tol` AND at least half the bones agree after it, more of them than agree
-    unturned (a skeleton that matches only once turned). A clip whose bind is
-    posed far from the rest everywhere (no half agrees either way) cannot tell
-    a turned file from its own pose and is not refused. Returns (degrees,
-    bones agreeing after the turn, bones measured)."""
+def frame_check(rig_heads, clip_heads, rb, order, tol=BIND_TOL_DEG):
+    """Whether the --bind-from file's world is the clip's: one of three states,
+    as {"state", "turn_deg", "agree", "bones"}. The rig's bone directions are
+    fitted onto the clip bind's (`trimmed_fit`). `turned`: the fit turns by
+    more than `tol`, at least half the bones agree after it and more of them
+    than agree unturned (a skeleton that matches only once turned); `agree` is
+    the bones agreeing after the turn. `aligned`: otherwise, when at least half
+    the bones agree unturned. `inconclusive`: neither; a clip whose bind is
+    posed far from the rest on most bones cannot tell a turned file from its
+    own pose. For both, `agree` is the bones agreeing unturned."""
     segs = segments(clip_heads, rig_heads, rb, order)
     if not segs:
-        return None
+        return {"state": "inconclusive", "turn_deg": None, "agree": 0, "bones": 0}
+    R, ang = trimmed_fit(segs, tol)
+    turn = math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(R) - 1) / 2))))
+    fitted = sum(1 for d in ang if d <= tol)
+    unturned = sum(1 for _pr, a, b in segs if angle_deg(a, b) <= tol)
+    if turn > tol and 2 * fitted >= len(segs) and fitted > unturned:
+        state, agree = "turned", fitted
+    else:
+        state, agree = ("aligned" if 2 * unturned >= len(segs) else "inconclusive"), unturned
+    return {"state": state, "turn_deg": round(turn, 1), "agree": agree, "bones": len(segs)}
     R, ang = trimmed_fit(segs, tol)
     turn = math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(R) - 1) / 2))))
     fitted = sum(1 for d in ang if d <= tol)
@@ -621,18 +636,23 @@ def main():
     bind_mismatch = {}
     rig_hips = None
     hips_offset = None
+    bind_frame = None
     if bind_from and bind_from != "clip":
         rig_Bw, rig_heads = bind_armature(bind_from, names, rename=do_rename)
         rig_off = over(bind_off_rest(rig_heads, rb, order, P0))
         if rig_off:
             raise ValueError(f"--bind-from={bind_from} is not the rig rest.json was dumped from: its bind is off "
                              f"rest.json by more than {BIND_TOL_DEG} deg at {listed(rig_off)}")
-        turned = frame_turn(rig_heads, clip_heads, rb, order)
-        if turned:
+        bind_frame = frame_check(rig_heads, clip_heads, rb, order)
+        if bind_frame["state"] == "turned":
             raise ValueError(f"--bind-from={bind_from} is in another world frame than the clip: its skeleton matches "
-                             f"the clip's bind only after a {turned[0]:0.1f} deg turn ({turned[1]} of {turned[2]} "
-                             "bones), and its bind would flip every frame; pass the file of the skeleton the clip was "
-                             "authored against, exported in the clip's world")
+                             f"the clip's bind only after a {bind_frame['turn_deg']:0.1f} deg turn "
+                             f"({bind_frame['agree']} of {bind_frame['bones']} bones), and its bind would flip every "
+                             "frame; pass the file of the skeleton the clip was authored against, exported in the "
+                             "clip's world")
+        print(f"frame check: {bind_frame['state']} ({bind_frame['agree']} of {bind_frame['bones']} bones agree)"
+              + ("; the clip's bind is posed too far from the rest to confirm the file's world is the clip's"
+                 if bind_frame["state"] == "inconclusive" else ""))
         rig_leg_len, clip_leg_len = leg_length(rig_heads), leg_length(clip_heads)
         if not abs(rig_leg_len - clip_leg_len) <= BIND_LEG_TOL * clip_leg_len:
             raise ValueError(f"--bind-from={bind_from}: its leg chain is {rig_leg_len:0.4f} units and the clip's "
@@ -949,6 +969,7 @@ def main():
            "bind_from": (bind_from if bind_from == "clip" else os.path.basename(bind_from)) if bind_from else None,
            "bind_mismatch_deg": bind_mismatch, "bind_tolerance_deg": BIND_TOL_DEG,
            "bind_hips_offset_studs": round(hips_offset * k, 4) if hips_offset is not None else None,
+           "bind_frame": bind_frame,
            "translate": sorted(translate), "translation_dropped": {n: round(v, 4) for n, v in sorted(dropped.items())},
            "trim": [t_start, t_end] if trim is not None else None}
     if emit_root:
