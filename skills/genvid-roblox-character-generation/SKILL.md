@@ -678,7 +678,7 @@ template is wired and parked (Stage order, above):
     runner clips ingest motion --manifest M --clip <key> --mode <convention> --provider ... --model ... --cost ... <result>
     runner clips transfer --manifest M --clip <key> [--candidate N | --source generated] \
         [--g <name> | --g-from <key>] [--no-root] [--root-ref first|bind] \
-        [--root-y hips|ground [--rig-mesh <glb>]] [--trim START:END] [--translate BONE[,BONE...]] \
+        [--root-y hips|ground [--rig-mesh <glb>]] [--root-xz keep|none] [--trim START:END] [--translate BONE[,BONE...]] \
         [--bind-from <rig fbx|glb> | --bind-from clip]
     runner clips build --manifest M --clip <key> [--anims-dir <dir>] [--time-scale <factor>]   # then let Rojo sync
     runner clips build-kfs --manifest M --clip <key>                          # Edit; read-only verify
@@ -699,7 +699,9 @@ template is wired and parked (Stage order, above):
   first). `--no-root` emits rotations only; `--root-ref first|bind` measures
   root motion from the clip's first frame (the default) or the bind pose;
   `--root-y ground` is the opt-in ground lock, which skins
-  `stages.rig.artifact_glb` unless `--rig-mesh` names another glb; `--trim
+  `stages.rig.artifact_glb` unless `--rig-mesh` names another glb;
+  `--root-xz none` drops the root's horizontal travel and keeps its lift
+  (below the transfer laws); `--trim
   START:END` keeps one range of the source clip, in seconds of authored time;
   `--translate BONE[,BONE...]` carries those non-root bones' translation
   (below the transfer laws); `--bind-from <file>` measures the transfer from
@@ -940,7 +942,19 @@ height (the mesh is then not the rig rest.json came from). The item records
 `root_y` (`hips`, the default, or `ground`), `k` and the fit (`ground`). The
 lock keeps the lowest point down on every frame, so a clip whose feet dig
 into the ground at toe-off bobs its hips by the dig instead; it is opt-in,
-and it is wrong for a clip meant to leave the ground. Check
+and it is wrong for a clip meant to leave the ground.
+
+A clip whose root travels and never returns (a lunge, a flight that lands far
+ahead) leaves the mesh away from its collider and trips the in-place bench
+gates on root travel; the next clip snaps it back. `clips transfer --root-xz
+none` plays it in place: every frame's horizontal root delta is zeroed and
+the vertical stays as `--root-y` sets it (the ground lock included), so a
+lift and a glide height are kept. Across the ground the hips stay where the
+reference puts them: the bind pose's place under `--root-ref=bind`, the first
+frame's under `first`. The trajectories the eval scores carry the in-place
+motion; the axis-map pick reads the authored motion unstripped, so it and
+every bone's rotation are the same either way. The item records `root_xz`
+(`keep`, the default, or `none`). It is refused with `--no-root`. Check
 `frames[0].r` and `frames[-1].r` before publishing: an
 Action clip the game holds (a stun, a death) keeps its last-frame offset for
 as long as it is held, and a clip that blends back to idle snaps from it. A
