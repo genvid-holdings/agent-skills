@@ -6,8 +6,8 @@ Run headless:
   blender --background --python poses.py -- <clip.fbx|glb> <rest.json> <out.json> \\
       [--rename|--donor|--mixamo|--ual] [--action=NAME] [--rig-height=<studs>] \\
       [--g=<candidate>] [--no-root] [--root-ref=first|bind] [--trim=START:END] \\
-      [--root-y=hips|ground --rig-mesh=<rig.glb>] [--translate=BONE[,BONE...]] \\
-      [--bind-from=<rig.fbx|glb>|clip]
+      [--root-y=hips|ground --rig-mesh=<rig.glb>] [--root-xz=keep|none] \\
+      [--translate=BONE[,BONE...]] [--bind-from=<rig.fbx|glb>|clip]
 
 `--bind-from=<rig file>` takes the bind the transfer measures from (Bw below,
 and the hips the `bind` root reference starts at) from the fbx or glb of the
@@ -50,6 +50,19 @@ the skinned glb of the rig `rest.json` was dumped from, fitted to it and
 refused above a 1%-of-height fit error) back on its rest level. The horizontal
 root motion still follows `--root-ref`. The default, `hips`, carries the clip's
 hips height change scaled by the leg-chain ratio `k`.
+
+`--root-xz=none` keeps the root's vertical motion and drops its travel: every
+frame's root delta has its rig-frame X and Z zeroed before it is expressed in
+the root bone's rest frame, and Y stays as `--root-y` sets it. A clip whose
+root travels forward and never returns (a lunge, a flight that lands far
+ahead) then plays in place with its lift, instead of leaving the mesh away
+from its collider to snap back on the next clip. Across the ground the hips
+stay where the reference puts them on every frame: the bind pose's place under
+`--root-ref=bind`, the first frame's under `first`. The `traj` block carries
+the same in-place motion. The axis-map scoring reads the authored motion
+unstripped, so the pick, and every bone's rotation, is the same with the
+option as without it. Refused with `--no-root`. The default, `keep`, carries
+the travel.
 
 `--trim=START:END` keeps only the source clip's frames between START and END
 seconds (authored time, from the clip's first frame) and re-bases them so the
@@ -503,6 +516,14 @@ def main():
     root_y = next((a.split("=", 1)[1] for a in argv if a.startswith("--root-y=")), "hips")
     assert root_y in ("hips", "ground"), "--root-y must be hips or ground"
     rig_mesh = next((a.split("=", 1)[1] for a in argv if a.startswith("--rig-mesh=")), None)
+    # Horizontal root motion: "keep" (default) carries the hips' travel from
+    # the root reference; "none" zeroes it on every frame, so a clip whose
+    # root travels and never returns plays in place with its vertical motion.
+    root_xz = next((a.split("=", 1)[1] for a in argv if a.startswith("--root-xz=")), "keep")
+    if root_xz not in ("keep", "none"):
+        raise ValueError(f"--root-xz must be keep or none, not {root_xz!r}")
+    if root_xz == "none" and not emit_root:
+        raise ValueError("--root-xz=none with --no-root: a rotation-only doc has no root motion to keep the lift of")
     if root_y == "ground":
         if not emit_root:
             raise ValueError("--root-y=ground with --no-root: a rotation-only doc has no root motion to lock")
@@ -947,6 +968,8 @@ def main():
             droot = hdelta.copy()
             if ground is not None:
                 droot[1] = ground["rest_low"] - low[fi]
+            if root_xz == "none":
+                droot[0] = droot[2] = 0.0
             # expressed in the root bone's own rest frame (a Pose CFrame
             # position is applied inside the bone's rest rotation, like
             # Bone.Transform). The HumanoidRootPart itself never moves: the
@@ -965,7 +988,8 @@ def main():
            "root_motion": bool(emit_root), "root_ref": root_ref, "g": g_name, "g_forced": forced_g is not None,
            "root_range_studs": [round(float(v), 3) for v in root_range],
            "k": round(float(k), 5), "k_source": "leg_chain",
-           "root_y": root_y if emit_root else None, "ground": ground, "held": held,
+           "root_y": root_y if emit_root else None, "root_xz": root_xz if emit_root else None,
+           "ground": ground, "held": held,
            "bind_from": (bind_from if bind_from == "clip" else os.path.basename(bind_from)) if bind_from else None,
            "bind_mismatch_deg": bind_mismatch, "bind_tolerance_deg": BIND_TOL_DEG,
            "bind_hips_offset_studs": round(hips_offset * k, 4) if hips_offset is not None else None,

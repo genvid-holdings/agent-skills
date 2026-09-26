@@ -257,6 +257,8 @@ ROOT_REFS = ("first", "bind")
 # Vertical root motion (poses.py --root-y): the proportional hips delta, or the
 # ground lock that keeps the rig's lowest skinned vertex on the ground.
 ROOT_YS = ("hips", "ground")
+# Horizontal root motion (poses.py --root-xz): the hips' travel, or none (in place).
+ROOT_XZS = ("keep", "none")
 # What `impact()` records on the measured clip's own item: every clip keeps its
 # own impact, so a title with several attack clips times each one.
 ITEM_IMPACT_KEYS = ("impact_delay_secs", "impact_raw_secs")
@@ -269,7 +271,8 @@ PUBLISHED_ITEM_KEYS = ("roblox_id", "kfs_name", "registration", "bench")
 # The item's transfer options (and the build's time scale) `bind()` records in
 # the generation params, so two versions of a clip are told apart by more than
 # their titles.
-TRANSFER_OPTION_KEYS = ("root_y", "root_ref", "g", "g_from", "trim", "time_scale", "k", "translate", "bind_from")
+TRANSFER_OPTION_KEYS = ("root_y", "root_ref", "g", "g_from", "trim", "time_scale", "k", "translate", "bind_from",
+                        "root_xz")
 # The skeleton conventions whose clips are on another skeleton than the rig's:
 # poses.py re-rests them onto their own bind and refuses --bind-from.
 FOREIGN_MODES = ("--mixamo", "--ual")
@@ -319,7 +322,7 @@ def recorded_g(m, clip):
 
 def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloads=None, blender=None,
              g=None, g_from=None, no_root=False, root_ref=None, trim=None, root_y=None, rig_mesh=None,
-             translate=None, bind_from=None):
+             translate=None, bind_from=None, root_xz=None):
     """Run `blender/poses.py` on `candidate` for `clip`; record the result under
     `stages.clips.items[<clip>]` and return the poses JSON path. A generated
     motion's candidate comes from `generated_candidate()`.
@@ -338,7 +341,10 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
     `translate` (bone names) carries those non-root bones' authored translation
     into their Pose positions, and the item records the bones carried
     (`translate`) and the translated bones left rotation-only
-    (`translation_dropped`, bone -> studs); `bind_from` is the fbx or glb of
+    (`translation_dropped`, bone -> studs); `root_xz="none"` drops the root's
+    horizontal travel on every frame and keeps its vertical motion (a clip
+    whose root travels and never returns plays in place), recorded as
+    `root_xz`; `bind_from` is the fbx or glb of
     the skeleton the clip was authored on, in its rest (the rig's own file),
     whose bind the transfer measures from instead of the clip file's, or
     "clip" to transfer from the clip's own bind even where it is off the rig's
@@ -363,6 +369,10 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
     trim_range = parse_trim(trim) if trim is not None else None
     if root_y is not None and root_y not in ROOT_YS:
         raise ValueError("--root-y must be one of %s" % ", ".join(ROOT_YS))
+    if root_xz is not None and root_xz not in ROOT_XZS:
+        raise ValueError("--root-xz must be one of %s" % ", ".join(ROOT_XZS))
+    if root_xz == "none" and no_root:
+        raise ValueError("--root-xz none keeps the root's vertical motion; --no-root emits none")
     if rig_mesh and root_y != "ground":
         raise ValueError("--rig-mesh is read only by --root-y ground")
     if root_y == "ground":
@@ -445,6 +455,8 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
         argv.append("--translate=%s" % ",".join(translate))
     if bind_from:
         argv.append("--bind-from=%s" % bind_from)
+    if root_xz == "none":
+        argv.append("--root-xz=none")
     r = subprocess.run(argv, capture_output=True, text=True)
     # --python-exit-code 1 (as rig.r15() uses): without it Blender exits 0 on a
     # raised exception too, and a stale poses.json from an earlier run would
@@ -483,6 +495,7 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
             "g": poses.get("g"), "g_forced": bool(poses.get("g_forced")), "g_from": g_from,
             "root_motion": poses.get("root_motion", not no_root), "root_ref": poses.get("root_ref", root_ref),
             "root_y": poses.get("root_y", None if no_root else (root_y or "hips")), "k": poses.get("k"),
+            "root_xz": poses.get("root_xz", None if no_root else (root_xz or "keep")),
             "ground": poses.get("ground"),
             "trim": list(trim_range) if trim_range else None,
             "translate": poses.get("translate", []), "translation_dropped": poses.get("translation_dropped", {}),
@@ -1221,7 +1234,8 @@ def _transfer_cli(x):
              archive_root=x.archive_root, downloads=x.downloads, blender=x.blender,
              g=x.g, g_from=x.g_from, no_root=x.no_root, root_ref=x.root_ref, trim=x.trim,
              root_y=x.root_y, rig_mesh=x.rig_mesh,
-             translate=[b for b in (x.translate or "").split(",") if b] or None, bind_from=x.bind_from)
+             translate=[b for b in (x.translate or "").split(",") if b] or None, bind_from=x.bind_from,
+             root_xz=x.root_xz)
 
 
 def _build_cli(x):
@@ -1324,6 +1338,9 @@ def register(sub):
     a.add_argument("--root-y", choices=ROOT_YS, default=None,
                    help="vertical root motion: the hips delta (default) or `ground`, which keeps the rig's lowest "
                         "skinned vertex on the ground every frame")
+    a.add_argument("--root-xz", choices=ROOT_XZS, default=None,
+                   help="horizontal root motion: the hips' travel (default) or `none`, which keeps the vertical and "
+                        "plays the clip in place")
     a.add_argument("--rig-mesh", default=None,
                    help="with --root-y ground: the rig's skinned glb (default stages.rig.artifact_glb)")
     a.add_argument("--trim", default=None, metavar="START:END",
