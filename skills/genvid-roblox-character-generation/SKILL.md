@@ -686,6 +686,7 @@ template is wired and parked (Stage order, above):
     runner clips publish-clip --manifest M --clip <key> [--group <Roblox group id>]   # Edit
     runner studio ingest publish_clip --manifest M --clip <key> <result>
     runner clips bench --manifest M --clip <key> [--speed <x>] [--max-wait <s>]   # Play, Server
+    runner clips contact --manifest M --clip Slam [--rig-mesh <skinned glb|fbx>]   # offline, Blender; for E21
     runner studio ingest bench_clip --manifest M --clip <key> <result>
     runner clips bind --manifest M --ids <key>=<Roblox asset id> ...          # writes the two payloads
     runner clips registered --manifest M --clip <key> --media-id <Genvid media id>
@@ -756,7 +757,31 @@ template is wired and parked (Stage order, above):
   its source citation are below.
 - `clips impact` measures an attack clip's impact time and `clips speed-scale`
   derives the walk's speed scale from the in-engine treadmill measurement;
-  both are numbers a title's game reads.
+  both are numbers a title's game reads. The impact is the striking limb's
+  low. Each foot and hand's drop is its largest fall from any sample to a
+  later one (a follow-through may end higher than the wind-up); among the
+  limbs whose drop is at least half the largest, the striker is the one whose
+  low reaches lowest, so a stomp's foot beats arms swinging further above it
+  and a foot planted through a hand strike never decides it. Any clip whose
+  limbs move has a strike (a walk's feet come down); only a held pose has
+  none. Eval row E21 is the Slam clip's ground gate, scored on CONTACT at
+  the strike. `clips contact --clip Slam` measures it offline in Blender:
+  the strike is read off the Slam's trajectory hands first (a hand scores
+  whenever one drops at least half as far as the largest drop, a foot only
+  when no hand does), the rig's skinned glb or fbx is fitted to rest.json
+  and posed at that frame from the poses doc, and the contact is the lowest
+  vertex skinned mainly to the striking bone or a bone under it. It is
+  recorded on the Slam's item with the sha256 of the rig file, rest.json and
+  the poses doc, and E21 reads it only while all three still match. The skin
+  must land within +-0.029 x height (`bench_gates.foot_contact_frac`, the band
+  the bench holds a planted sole to; a proposal) of the sole plane in the
+  rig's own frame (the ground-fit plane carried across by the hips' rest
+  height): short of the ground fails, and so does sinking through it. A title
+  with no Slam clip reads E21 PEND, an Attack answers to no ground gate, and
+  a Slam with no measurement, or a stale one, reads FAIL (missing), the
+  eval's rule for a gate without evidence. E15 gates the walk cycle as the game
+  plays it, the built cycle over `animSpeedScale`, against 2.0 s x
+  sqrt(height / 50).
 
 **A title's own clip keys (`clips declare`).** The catalog's clips (Walk,
 Idle, Stun, Attack, Death, Slam) are the pack's. A title whose characters play
@@ -871,8 +896,8 @@ in the game:
    clip reads it (`timing.clip_time`): the item's `scaled_seconds` (the bound
    row's `duration_seconds`), its `impact_delay_secs` (re-derived when the clip
    is rebuilt after `clips impact`, with the `attackImpactDelaySecs` mirror when
-   it names the clip), and eval rows E15, E20 and E21 (E20 reads the Attack
-   clip's own impact; the mirror only where it can be the Attack clip's). A clip
+   it names the clip), and eval rows E15 and E20 (E20 reads the Attack clip's
+   own impact; the mirror only where it can be the Attack clip's). A clip
    with no `time_scale` keeps the height stretch.
 7. *A rig's extra bones ride along.* The rest dump carries every bone but the
    root node, so a rig with bones beyond R15 (wings, a jaw, cloth) gets them
@@ -959,9 +984,8 @@ every bone's rotation are the same either way. The item records `root_xz`
 Action clip the game holds (a stun, a death) keeps its last-frame offset for
 as long as it is held, and a clip that blends back to idle snaps from it. A
 repeating library clip (several seconds of stomping in place, say) is
-trimmed to one action before building, and its impact is the first foot
-landing after the peak lift, not the global minimum the default detector
-finds across hands and feet. `clips transfer --trim START:END` does the cut:
+trimmed to one action before building, and its impact is the first
+landing after the peak lift, not the last of several. `clips transfer --trim START:END` does the cut:
 it keeps that range of the source clip (seconds, authored time) and re-bases
 it to start at 0 before anything reads it, so the root reference is the first
 kept frame, the axis scoring and trajectories see one action, and the

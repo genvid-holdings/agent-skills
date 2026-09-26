@@ -47,6 +47,7 @@ from pathlib import Path
 
 import cost
 import metrics
+import request
 import timing
 
 # The authoritative measurement for these two is `dump_rest` on the PARKED
@@ -108,7 +109,7 @@ CALIBRATION = {
     "E10c": {"value": 0.5, "calibrated": False, "source": None},
 }
 
-CLIP_NAMES = ("Walk", "Attack")
+CLIP_NAMES = ("Walk", "Attack", "Slam")
 
 # bench_clip gates (rows E30-E32), as fractions of height_studs, ruled
 # 2026-09-24. A title overrides any of them, and any clip's motion class, under
@@ -223,7 +224,18 @@ class Ctx:
             self.clip_traj[clip] = _load_json(self.out / "clips" / ("%s.traj.json" % clip))
 
     def feet_y(self):
-        return _dig(self.m, "stages.groundfit.result.feetPlane")
+        """The sole plane in the rig's own frame, the frame rest.json and the
+        clip trajectories are in. groundfit measures the plane (`feetPlane`)
+        and the hips (`lowerTorsoY`) in the WORLD, where the imported rig sits
+        wherever the place put it; the hips' rest height in the rig frame
+        (rest.json) carries the plane across. None when any of the three is
+        missing: a world plane compared with rig-frame heights reads hundreds
+        of studs off and passes any gate."""
+        plane = _dig(self.m, "stages.groundfit.result.feetPlane")
+        hips = _dig(self.m, "stages.groundfit.result.lowerTorsoY")
+        if plane is None or hips is None or not self.rest or "LowerTorso" not in self.rest:
+            return None
+        return metrics._world_y(self.rest, "LowerTorso") - (float(hips) - float(plane))
 
 
 def _row_E1(ctx):
@@ -452,12 +464,15 @@ def _clip_metric(ctx, clip, fn):
 
 
 def _row_E15(ctx):
-    """Walk cycle length, SCALED. `<Clip>.poses.json`'s frame `t`s are raw,
-    unscaled seconds (kfs.write, not transfer(), is what applies
-    timing.scale_time -- see clips.py's on-disk docs) but the plan's threshold
-    (">= 2.0 s" at 50 studs) is a scaled-seconds number, so scale the raw
-    cycle length here the same way clips.impact() scales attackImpactDelaySecs,
-    or every character taller than REF_HEIGHT reads a cycle short of the gate."""
+    """Walk cycle length as the game PLAYS it. `<Clip>.poses.json`'s frame
+    `t`s are raw, authored seconds (kfs.write, not transfer(), applies the
+    build's scale), so the raw cycle is scaled the way the built Walk plays
+    (its own time_scale when `clips build` set one, else the height stretch),
+    then divided by `stages.clips.animSpeedScale`, the speed the game plays
+    the walk at, when the clip stage records one. The gate grows with the
+    square root of the height (`E15_LIMIT_S` at `E15_REF_HEIGHT`, the cadence
+    law): a clip authored for a giant and built at time_scale 1 reads its
+    authored length until the played speed is applied."""
     poses = ctx.clip_poses.get("Walk")
     if not poses:
         return None
@@ -466,7 +481,19 @@ def _row_E15(ctx):
         return None
     raw = metrics.cycle_seconds(times)
     # as the built Walk plays: its own time_scale when `clips build` set one
-    return timing.clip_time(_dig(ctx.m, "stages.clips.items.Walk"), raw, ctx.m["height_studs"])
+    built = timing.clip_time(_dig(ctx.m, "stages.clips.items.Walk"), raw, ctx.m["height_studs"])
+    speed = _dig(ctx.m, "stages.clips.animSpeedScale")
+    return built if speed is None else built / float(speed)
+
+
+# E15: the played walk cycle is at least E15_LIMIT_S at E15_REF_HEIGHT studs,
+# scaled by sqrt(height / E15_REF_HEIGHT) (the sqrt-height cadence law).
+E15_LIMIT_S = 2.0
+E15_REF_HEIGHT = 50.0
+
+
+def e15_limit(height_studs):
+    return E15_LIMIT_S * math.sqrt(float(height_studs) / E15_REF_HEIGHT)
 
 
 def _row_E16(ctx):
@@ -524,24 +551,38 @@ def _row_E20(ctx):
 
 
 def _row_E21(ctx):
-    traj = ctx.clip_traj.get("Attack")
-    impact_t = _row_E20(ctx)
+    """How far from the sole plane the Slam clip's striking limb makes CONTACT,
+    in studs (+ above, - through the ground): the lowest vertex skinned to the
+    striker or a bone under it, at the strike frame, as `clips contact`
+    measured it (`items.Slam.contact.lowest_y`, rig frame), less the sole plane
+    in the rig frame (`Ctx.feet_y`). The measurement names the rig file, and
+    the sha256 of that file, rest.json and the Slam's poses doc; it is read
+    only while all three still match the files on disk. None otherwise, or when
+    it was never measured or the plane cannot be placed; E21 is a gate only for
+    a title with a Slam clip (`_has_slam`), so there a missing or stale
+    measurement reads FAIL (missing)."""
+    item = _dig(ctx.m, "stages.clips.items.Slam") or {}
+    c = item.get("contact")
     feet_y = ctx.feet_y()
-    if not traj or impact_t is None or feet_y is None:
+    if not c or feet_y is None:
         return None
-    # E20's value (`impact_t` here, the Attack item's impact_delay_secs) is
-    # SCALED -- clips.impact() applies timing.scale_time before recording it
-    # -- but `<Attack>.traj.json` holds the RAW, unscaled sample times poses.py
-    # wrote (kfs.write is what scales, and it never touches the .traj.json
-    # sidecar). metrics.impact_height matches samples with `abs(t - impact_t)
-    # < 1e-6`, so comparing a scaled t against raw sample times finds nothing
-    # and returns inf for any character whose cadence != 1.0 (REF_HEIGHT only) --
-    # descale back to raw seconds first: scale_time divides by cadence, so
-    # multiplying by cadence is its inverse. A clip built at its own
-    # --time-scale is descaled by that instead (timing.authored_time).
-    raw_impact_t = timing.authored_time(_dig(ctx.m, "stages.clips.items.Attack"), impact_t, ctx.m["height_studs"])
-    v = metrics.impact_height(traj, raw_impact_t, feet_y)
-    return None if v == float("inf") else v
+    files = ((c.get("rig_mesh"), c.get("rig_sha256")), (str(ctx.out / "rest.json"), c.get("rest_sha256")),
+             (item.get("poses"), c.get("poses_sha256")))
+    for path, sha in files:
+        if not path or not sha or not Path(path).is_file() or request.sha256_of(Path(path)) != sha:
+            return None
+    return float(c["lowest_y"]) - feet_y
+
+
+# E21: the slam's contact is within the in-place foot-contact band of the sole
+# plane either way, +- `bench_gates.foot_contact_frac` x height (0.029, the band
+# the bench holds a planted sole to, E30). A PROPOSAL, not a ruling on the number.
+def e21_limit(m):
+    return foot_band(m, "in_place")
+
+
+def _has_slam(m):
+    return _dig(m, "stages.clips.items.Slam") is not None
 
 
 def _row_E22(ctx):
@@ -949,8 +990,10 @@ def build_rows(ctx):
         % (E13_GAP_TOL, E13_GAP_TOL), readings_fn=_row_E13_readings)
     add("E14", "groundfit", "feet grounded, far LOD", "auto", False, "eval.groundfit.probe_far", _row_E14,
         _between(-1.0, 1.0), "-1.0 <= gap <= 1.0 studs, measured in Play (PEND until the Mesh & Image API is on)")
-    add("E15", "clips", "Walk cadence (cycle seconds)", "auto", True, "eval.clips.Walk.cycle_seconds", _row_E15,
-        _ge(2.0), ">= 2.0 s")
+    add("E15", "clips", "Walk cadence (played cycle seconds)", "auto", True, "eval.clips.Walk.cycle_seconds",
+        _row_E15, _ge(e15_limit(ctx.m["height_studs"])),
+        ">= %g s x sqrt(height / %g) = %.2f s, the cycle over animSpeedScale"
+        % (E15_LIMIT_S, E15_REF_HEIGHT, e15_limit(ctx.m["height_studs"])))
     add("E16", "clips", "Walk foot lift", "auto", True, "eval.clips.Walk.foot_lift", _row_E16,
         lambda v: v >= 0.03 * ctx.m["height_studs"], ">= 0.03 x height")
     # E18's 0.25 threshold is a discriminator, not an arbitrary round number:
@@ -971,8 +1014,12 @@ def build_rows(ctx):
         "stages.clips.items.Attack.impact_delay_secs, else stages.clips.attackImpactDelaySecs", _row_E20,
         lambda v: 0.2 < v < (_dig(ctx.m, "stages.clips.items.Attack.scaled_seconds") or float("inf")) - 0.1,
         "0.2s < t < scaled clip_seconds - 0.1s")
-    add("E21", "clips", "attack reaches the ground", "auto", True, "eval.clips.Attack.impact_height", _row_E21,
-        _le(3.0), "<= 3 studs")
+    # a gate only for a title with a Slam clip: without one the row reads PEND
+    # (not applicable), and an Attack answers to no ground gate
+    add("E21", "clips", "slam reaches the ground", "auto", _has_slam(ctx.m), "eval.clips.Slam.impact_height",
+        _row_E21, _between(-e21_limit(ctx.m), e21_limit(ctx.m)),
+        "contact within +-%g x height = +-%.2f studs of the sole plane (proposal)"
+        % (bench_gates(ctx.m)["foot_contact_frac"], e21_limit(ctx.m)))
     add("E22", "clips", "naming law", "auto", True, "file name", _row_E22,
         lambda v: isinstance(v, list) and v and all(_no_brand(n) for n in v), "no brand word")
     add("E23", "wire", "recipe applied", "auto", True, "stages.wire.result", _row_E23, _wire_all_true, "all true")
@@ -1078,7 +1125,7 @@ def run(m, stage=None):
             "foot_lift": _row_E16(ctx) if clip == "Walk" else None,
             "hip_twist_deg": _row_E17(ctx) if clip == "Walk" else None,
             "knee_twist_frac": _row_E18(ctx) if clip == "Walk" else None,
-            "impact_height": _row_E21(ctx) if clip == "Attack" else None,
+            "impact_height": _row_E21(ctx) if clip == "Slam" else None,
         }
 
     # Start from whatever eval.json already held (in particular the groundfit
