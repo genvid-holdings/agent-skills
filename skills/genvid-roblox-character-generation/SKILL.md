@@ -1007,7 +1007,14 @@ then by the model scale, where a rotation needs neither. `clips transfer
 bone's displacement from where its parent's animated frame puts it at rest,
 mapped by the same `g` and scaled by the same `k` as the root motion, and
 written in the bone's rest frame under its parent's transferred rotation, so
-it follows the parent as it turns. A root bone is refused (its translation is
+it follows the parent as it turns. "At rest" is the rig's rest offset when
+`--bind-from` names the rig's file, and the clip's own otherwise: a clip file
+with no skinned mesh takes its pose at export as its rest, so a bone held
+translated for the whole clip (a wing pulled out from the arm) would read as
+not translated at all, and would not be listed as dropped either. Because
+the dropped report reads every keyed non-root bone, the rig file must parent
+each of them where the clip does (a bone rest.json lacks, such as a neck,
+may sit between), or the transfer is refused naming both parents. A root bone is refused (its translation is
 the root motion), as is a bone not in rest.json, a bone the clip does not
 key (held at rest) and a bone whose clip bone has no parent to measure it
 from. Every transfer names the rest.json bones it

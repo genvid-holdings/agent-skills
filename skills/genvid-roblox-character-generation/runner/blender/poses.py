@@ -116,7 +116,12 @@ skeleton's proportions, which the rig's own rest replaces. A named bone's
 translation is its head's displacement from where its parent's animated
 frame puts it at rest, in clip world, mapped by the same `g` and scaled by
 the same `k` as the root motion, then expressed in the bone's rest frame
-under its parent's transferred rotation.
+under its parent's transferred rotation. With `--bind-from=<rig file>` "at
+rest" is the rig file's offset from the parent, not the clip's: a clip file
+with no bind pose takes its pose at export as its rest, which already holds
+any translation kept through the clip. The dropped report reads every keyed
+non-root bone the same way, so the rig file must parent each of them where
+the clip does, or the transfer is refused naming both parents.
 
 Ported from the retired pipeline's stage_h_poses.py. Changes from that source:
 the RENAME/MERGE/MIXAMO_MAP/UAL_MAP tables come from the runner's `rigtables`
@@ -345,9 +350,11 @@ def rename_to_r15(arm):
 def bind_armature(path, names, rename=False):
     """The bind of the armature in `path` (a rig fbx or glb): per bone in
     `names` its world bind rotation and origin, read in the same Blender world
-    the clip was imported into. `rename` puts its bones through the same
-    rename/merge the clip took. The import cannot move the clip's timing: the
-    scene's frame rate and range are put back as they were."""
+    the clip was imported into, and per bone with a parent its rest offset in
+    that parent's frame, in world units, with the parent's name. `rename` puts
+    its bones through the same rename/merge the clip took. The import cannot
+    move the clip's timing: the scene's frame rate and range are put back as
+    they were."""
     sc = bpy.context.scene
     kept = (sc.render.fps, sc.render.fps_base, sc.frame_start, sc.frame_end, sc.frame_current)
     before = set(bpy.data.objects)
@@ -369,7 +376,10 @@ def bind_armature(path, names, rename=False):
     AW = _u @ _vt
     Bw = {n: AW @ np.array(mat9(rig.data.bones[n].matrix_local))[:3, :3] for n in names}
     heads = {n: np.array((rig.matrix_world @ rig.data.bones[n].matrix_local).translation) for n in names}
-    return Bw, heads
+    scale = float(np.mean(_s))
+    offsets = {n: (b.parent.name, (b.parent.matrix_local.inverted() @ b.matrix_local).translation * scale)
+               for n in names for b in (rig.data.bones[n],) if b.parent is not None}
+    return Bw, heads, offsets
 
 
 # A non-root bone whose translation moves it less than this fraction of the
@@ -563,7 +573,7 @@ def main():
     hips_offset = None
     bind_frame = None
     if bind_from and bind_from != "clip":
-        rig_Bw, rig_heads = bind_armature(bind_from, names, rename=do_rename)
+        rig_Bw, rig_heads, rig_offsets = bind_armature(bind_from, names, rename=do_rename)
         rig_off = over(bind_off_rest(rig_heads, rb, order, P0))
         if rig_off:
             raise ValueError(f"--bind-from={bind_from} is not the rig rest.json was dumped from: its bind is off "
@@ -628,10 +638,27 @@ def main():
     # (clip world, clip units) from where its parent's animated frame puts it
     # at rest; zero for a bone the clip only rotates
     moves = []
-    # each such bone's rest offset in its clip parent's frame
+    # each such bone's rest offset in its clip parent's frame. With a rig
+    # file it is the rig's rest offset: a clip file with no bind pose takes
+    # its pose at export as its rest, so a bone held translated in that pose
+    # would read as not translated at all (witnessed 2026-09-27, wing bones
+    # held 3.84 studs off the rig's rest in every clip of an armature-only
+    # set, carried back to the rest and reported as nothing dropped)
     offsets = {n: (pb.parent.bone.matrix_local.inverted() @ pb.bone.matrix_local).translation
                for n in names for pb in (arm.pose.bones[src[n]],)
                if rb[n]["parent"] != "HumanoidRootPart" and pb.parent is not None}
+    if bind_from and bind_from != "clip":
+        clip_names = {c: n for n, c in src.items()}
+        clip_scale = float(np.mean(_s))
+        for n in offsets:
+            # a parent rest.json lacks (a neck between torso and head) keeps its clip name
+            raw = arm.pose.bones[src[n]].parent.name
+            clip_parent = clip_names.get(raw, raw)
+            rig_parent, off = rig_offsets.get(n, (None, None))
+            if rig_parent != clip_parent:
+                raise ValueError(f"--bind-from={bind_from}: {n}'s parent is {rig_parent} there and {clip_parent} "
+                                 "in the clip, so its rest offset cannot be measured from the rig")
+            offsets[n] = off / clip_scale
     for f, t in zip(fnums, times):
         bpy.context.scene.frame_set(f)
         A, D = {}, {}
