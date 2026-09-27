@@ -518,8 +518,8 @@ def surface_prep(m, texture=None, blender=None, run=subprocess.run, texture_medi
     only one it reads from.
     """
     # Media-bind-only site (a re-bake of an already-recorded character) -- check
-    # the claim BEFORE the Blender conversion below, not just before the import,
-    # so a pending claim doesn't cost a Blender run.
+    # the claim BEFORE the Blender conversion below, so a pending claim doesn't
+    # cost a Blender run, and again before the import.
     recorded = (_st(m).get("generated") or {}).get(TEXTURE_ITEM) or {}
     texture = texture or recorded.get("artifact")
     # The bound texture row is cited only when it is the texture being baked; a
@@ -542,6 +542,9 @@ def surface_prep(m, texture=None, blender=None, run=subprocess.run, texture_medi
     # attests the converter and no cost, and cites the rig (and the texture,
     # when it is a bound media row) it was made from.
     inputs = [str(rig_st["media_id"])] + ([str(texture_media_id)] if texture_media_id else [])
+    # and again immediately before the governed write: the task may have been
+    # approved while Blender ran
+    genvid_bind.ensure_claim(m, m["asset_id"], "rig.surface")
     mid = genvid_bind.import_media(m["project_id"], path=str(dst), link_type=genvid_bind.MODEL_LINK,
         asset_id=m["asset_id"], model_provider=CONVERTER_PROVIDER, model_name=CONVERTER_MODEL,
         render_type=RENDER_TYPE, prompt="R15 skinned rig re-textured for the surface pass",
