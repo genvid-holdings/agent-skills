@@ -1226,10 +1226,13 @@ command needs genvid CLI 0.0.5 or newer; an older CLI is refused with the
 installed version and how to upgrade (`brew upgrade genvid` or install.sh).
 The claim gate reads the same way: `genvid list-tasks` (the organization id
 from `genvid get-project`), stored next to the status in the manifest's
-`claims` (§0). No payload file is written for either read and nobody records
-a verdict by hand: a cached verdict or claim status counts only when it
-carries the gate's own read and that read answers it; anything else, a
-hand-written `fits: true` included, is read again. The claim the runner
+`claims` (§0) as a record of the last read. The claim status is read live on
+every bind, immediately before the site's first governed write, whatever the
+record says: a task approved after an earlier read is reopened, not bound
+past, and a manifest note names the stale record. No payload file is written
+for either read and nobody records a verdict by hand: a cached budget verdict
+counts only when it carries the gate's own read and that read answers it;
+anything else, a hand-written `fits: true` included, is read again. The claim the runner
 writes for an unclaimed task is still a `create_assignment` payload: until it
 has run, the next bind on that asset stops with `ClaimPending` naming it
 rather than writing a second one.

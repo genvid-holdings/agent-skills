@@ -351,19 +351,8 @@ def _status_of(read, m, asset_id):
     return status
 
 
-def _claim_holds(entry, m, asset_id):
-    """A cached claim status holds only when its own list-tasks read of this
-    asset answers that status. A status with no such read behind it -- written
-    by hand, by the payload-era gate, or cached next to a claim payload -- is
-    read again."""
-    status, read = entry.get("workflow_status"), entry.get("read")
-    if not (isinstance(read, dict) and isinstance(read.get("command"), list)
-            and read["command"][1:2] == ["list-tasks"] and str(asset_id) in read["command"]):
-        return False
-    try:
-        return _status_of(read, m, asset_id) == status
-    except (GenvidReadError, KeyError, TypeError, AttributeError):
-        return False
+# What an ensure_claim call wrote on a claims entry beside its read.
+_PAYLOAD_KEYS = ("claim_payload", "reopen_payload", "reopened_from")
 
 
 def _pending_claim(m, asset_id):
@@ -464,28 +453,25 @@ def ensure_claim(m, asset_id, site):
     name the asset-creating gates; the sites above are the gates added by this
     function. Unlike `claim_assignment`, this asset was not
     necessarily just created here: it may be hand-created and never claimed,
-    already claimed and still `in_progress` (the common case -- must cost
-    nothing), or already `approved`/`in_review` because the reviewer acted
-    on an earlier bind on it, in which case the boundary may answer 409 to this one
-    unless the task is reopened first.
+    already claimed and still `in_progress` (the common case), or already
+    `approved`/`in_review` because the reviewer acted on an earlier bind on it
+    or after it, in which case the boundary may answer 409 to this one unless
+    the task is reopened first.
 
-    The status comes from `asset_image_status` (`genvid list-tasks`, read by
-    this helper itself): the first call for a given `(asset_id, site)` reads it
-    and caches it with the read's provenance (command, response, time) at
-    `m["claims"]["<asset_id>:<site>"]`, `"none"` if no assetImage task exists.
-    Nothing is recorded by hand: a cached status holds only while
-    `_claim_holds` (its own read answers it), and any other entry is read
-    again. `site` keys the cache so an
-    already-resolved plate.front claim never satisfies a later mesh/rig/clips
-    site on the same asset that was approved in between; `asset_id` keys it so
-    two different characters' manifests never share a cache entry. The cache
-    is not re-validated once resolved (same tradeoff `budget_gate` makes): a
-    same-site rebind after a LATER approval reads the stale cached
-    `in_progress` and can still 409 -- delete `m["claims"][key]` to force a
-    fresh read. The one status this helper never caches without reading it is
-    the post-reopen one: after writing a reopen payload it DROPS the cached
-    status, and the next call reads the task again (see the `approved` bullet
-    below).
+    The status is READ LIVE on every call, immediately before the site's first
+    governed write: `asset_image_status` (`genvid list-tasks`, read by this
+    helper itself), `"none"` if no assetImage task exists. What was read is
+    recorded with its provenance (command, response, time) at
+    `m["claims"]["<asset_id>:<site>"]`, as a record of the last read, never
+    as a gate: a task approved after an earlier read is seen on the next call
+    and reopened, not bound past. The claim or reopen payload an earlier call
+    wrote, and the status it reopened from, move to the entry's `history` when
+    a new read replaces it. A read that fails refuses (`GenvidReadError`) with
+    nothing written, whatever the record says. When the recorded status differs from the
+    live one, a manifest note names both and the earlier read's time. The
+    price is one `list-tasks` read per call, the common `in_progress` case
+    included. `site` and `asset_id` key the record, so two sites or two
+    characters never share one.
 
     Once the status is known:
     - `"none"`: writes the `create_assignment` claim (same shape
@@ -558,10 +544,23 @@ def ensure_claim(m, asset_id, site):
             "ensure_claim (%s): asset %s's assetImage task is %r after the reopen payload %s, which this "
             "helper does not know how to recover from -- resolve it by hand in Genvid, then retry"
             % (site, asset_id, status, entry["reopen_payload"]))
-    if entry is None or "workflow_status" not in entry or not _claim_holds(entry, m, asset_id):
-        status, read = asset_image_status(m, asset_id)
-        entry = claims[key] = {"workflow_status": status, "read": read}
-        manifest.save(m)
+    status, read = asset_image_status(m, asset_id)
+    recorded = (entry or {}).get("workflow_status")
+    if recorded is not None and recorded != status:
+        manifest.note(m, "ensure_claim (%s): asset %s's recorded assetImage status %r (read %s) is stale; the live "
+                         "read says %r" % (site, asset_id, recorded, ((entry or {}).get("read") or {}).get("read_at"),
+                                           status))
+    # The new read replaces the entry; what an earlier call wrote for it (a claim
+    # or reopen payload, the status it reopened from) is kept in its history,
+    # never left on the entry, where it would steer the next call.
+    history = list((entry or {}).get("history") or [])
+    earlier = {k: v for k, v in (entry or {}).items() if k in _PAYLOAD_KEYS}
+    if earlier:
+        history.append(dict(earlier, read_at=((entry or {}).get("read") or {}).get("read_at")))
+    entry = claims[key] = {"workflow_status": status, "read": read}
+    if history:
+        entry["history"] = history
+    manifest.save(m)
 
     status = entry["workflow_status"]
     if status == "in_progress":
