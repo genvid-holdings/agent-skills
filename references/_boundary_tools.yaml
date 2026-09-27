@@ -174,6 +174,17 @@
   status: live
   params: [project_id, asset_id, target, stage, media_id, link_type, payload, note]
 
+# link_media reuses an existing media on another asset by linking it, instead of
+# uploading the same file again (a copy loses the original's generation record).
+# target + stage scope the link to a pipeline stage, which is what
+# record_approved_corrections anchors on. additive: it adds a link and changes
+# nothing that exists. Deployed to prod 2026-09-27 (auto-deploy green, its
+# migration verified in the production database).
+- name: link_media
+  classification: additive
+  status: live
+  params: [project_id, asset_id, media_id, link_type, target, stage]
+
 # export_provenance_report reads a production's audit trail: what was
 # generated, by which model, at which attestation tier, with what approval chain,
 # residency, and cost, tied to the signed C2PA manifests. Returns inline JSON
