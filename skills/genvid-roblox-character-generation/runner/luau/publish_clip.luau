@@ -17,7 +17,7 @@
 -- CreatorType Enum.AssetCreatorType.Group, publishes a group-owned asset,
 -- which a group-owned experience (or a user-owned experience of the group's
 -- owner) can load; a user-owned copy of the same clip is refused there.
--- Uploading under a group is opt-in ({{CREATOR_FIELDS}} is empty by default,
+-- Uploading under a group is opt-in (the creator fields are empty by default,
 -- so the table below is unchanged from a user-owned publish). The result
 -- echoes creatorId/creatorType back rather than leaving the caller to infer
 -- them: a manifest's recorded group can move on to a different clip between

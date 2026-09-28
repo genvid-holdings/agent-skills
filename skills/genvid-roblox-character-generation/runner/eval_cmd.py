@@ -18,7 +18,17 @@ here: a stage module either conforms to them or this file is updated to match):
   - `<out_dir>/clips/<Clip>.bench.json`: the `bench_clip` timeline studio.py
     files beside the clip item's `bench` record (which carries `soleY` and, from
     benches that report it, `restAnkleY`), read by metrics.bench_readings for
-    E30-E32.
+    E30-E32. `bench` also carries `missingBones`, the names of any of
+    HIPS_BONE/HEAD_BONE/LFOOT_BONE/RFOOT_BONE bench_clip.luau could not find
+    on this rig, read by `_bench_unusable` to name the reason rather than
+    read the generic "no played samples."
+  - `stages.rig.report.parts`: no producer writes this yet (rig_prep.py's
+    report carries one skinned mesh's total, `tris_r15`). If a rig report
+    ever DOES break the mesh into named parts (more than one skinned
+    MeshPart, whose combined triangles a decimate that caps the total would
+    let exceed Roblox's per-MeshPart limit), it is `{part_name: {"tris":
+    int, ...}}`; E3b (`_row_E3b`) reads it in preference to `tris_r15` and
+    checks each part against the cap.
   - `<out_dir>/eval.json`: this module's own prior output, re-read at the start
     of every run so `groundfit.gap_close` / `groundfit.gap_far`, the whole
     `groundfit.probe_close` / `groundfit.probe_far` results E13 and E14 read
@@ -46,45 +56,24 @@ import math
 from pathlib import Path
 
 import cost
+import impact
 import metrics
 import request
 import timing
 
-# The authoritative measurement for these two is `dump_rest` on the PARKED
-# template in Studio, then reading both off that dump. What follows is a
-# LOCAL-ONLY proxy measurement against archived artifacts on disk (2026-09-03),
-# kept as a comment, not a calibration -- `calibrated` stays False and `value`
-# is untouched (still the spec's numbers) until dump_rest runs against the
-# parked template and someone deliberately sets these.
+# E6's calibration (2026-09-04 bake-off findings). silhouette_iou measures the
+# same artifact CLASS as the candidates -- the rigged GLB -- against the
+# manifest's own front plate PNG. The instrument's absolute scale is low
+# either way (an approved mesh scores ~0.43 against its own plate: A-pose arm
+# angle and plate shadow differ), so E6 RANKS candidates, it does not certify
+# them; the zoo verdict stands above it.
 #
-#   E10 shoulder_ratio, proxy source:
-#     a rigged character's roblox_rest.json (the rest dump written beside the
-#     rig artifact in the manifest's out_dir)
-#     feet_y = min(world_y(LeftFoot), world_y(RightFoot))  (ankle-bone proxy,
-#     not groundfit's mesh-sole feetPlane) -> shoulder_ratio = 0.8887.
-#     0.9x that would be 0.80, well above the spec's 0.68 -- the spec number is
-#     the conservative one here, on this one proxy sample.
-#   E6 silhouette_iou, proxy source:
-#     the conditioned mesh vs that manifest's own front plate PNG
-#     (confirmed single front view, flat gray ground, orientation matches) ->
-#     iou = 0.40, well BELOW the spec's 0.75. `conditioned.glb` is the mesh
-#     stage's un-decimated intermediate output, not the final skinned/rigged
-#     mesh the real E6 measurement would run against, so this number is not
-#     trustworthy as a calibration input either way -- flagging the mismatch
-#     rather than acting on it.
-#   E17/E18 sanity check (not a calibration input, no threshold here to set):
-#     that same character's Mixamo walk-poses JSON in out_dir
-#     (the approved July walk) -> hip_twist_deg = 5.76 (limit 25), knee_twist_frac
-#     = 0.238 (limit 0.25) -- both pass, knee twist close to the limit.
-#
-# E6 IS now calibrated (2026-09-04 bake-off findings). The proxy above
-# measured `conditioned.glb`,
-# a PRE-RIG intermediate, against its plate. The calibration below measures the
-# same artifact CLASS as the candidates -- the rigged GLB -- which is the whole
-# reason the number moved. The instrument's absolute scale is low either way (an
-# approved mesh scores ~0.43 against its own plate: A-pose arm angle and plate
-# shadow differ), so E6 RANKS candidates, it does not certify them; the zoo
-# verdict stands above it.
+# E10, E10b, E10c, E16, E17 and E18 (shoulder ratio, offline skeleton fit,
+# skinning symmetry, Walk foot lift, hip twist, knee twist) are RETIRED: each
+# measured a fixed human proportion or R15 bone name a rig kept on its own
+# skeleton is not guaranteed to have. Removed with their calibration entries,
+# helpers and tests rather than left to read
+# FAIL(missing) forever.
 CALIBRATION = {
     "E6": {"value": 0.389, "calibrated": True,
            "source": "2026-09-04 bake-off findings: 0.9 x silhouette_iou of an earlier approved "
@@ -93,20 +82,6 @@ CALIBRATION = {
                      "as the candidates, the rigged GLB) -> 0.9 x 0.4325 = 0.389. Candidates on "
                      "rig.raw.glb: leg A 0.3815 (fails by 0.008), leg B front-corrected v2 0.4465 "
                      "(passes)."},
-    "E10": {"value": 0.68, "calibrated": False, "source": None},
-    # Offline skeleton-fit gate: shoulder-bone separation over the largest mesh
-    # span, read off the RAW vendor rig by blender/rig_r15.py before any Studio
-    # step. Threshold stated by the eval matrix and backed by the same
-    # measurements: leg A 0.48 m / 1.80 m = 0.27 (a skeleton that fits), leg B v1
-    # 0.12 / 1.59 = 0.075 (both shoulders inside the torso, forearm weight bleed).
-    "E10b": {"value": 0.15, "calibrated": True,
-             "source": "2026-09-04 bake-off findings, raw rig glb in world space: leg A 0.48 m "
-                       "separation over 1.80 m span = 0.27; leg B v1 (misaligned) 0.12 over 1.59 "
-                       "= 0.075. Gate: separation/span >= 0.15 before any Studio step."},
-    # Left/right skinning balance. 734/8062 = 0.091 on leg B is plainly broken and
-    # 0.94 is plainly fine, but nothing has measured where the line sits, so this
-    # row reports and never gates -- the same treatment E10 gets.
-    "E10c": {"value": 0.5, "calibrated": False, "source": None},
 }
 
 CLIP_NAMES = ("Walk", "Attack", "Slam")
@@ -227,15 +202,75 @@ class Ctx:
         """The sole plane in the rig's own frame, the frame rest.json and the
         clip trajectories are in. groundfit measures the plane (`feetPlane`)
         and the hips (`lowerTorsoY`) in the WORLD, where the imported rig sits
-        wherever the place put it; the hips' rest height in the rig frame
-        (rest.json) carries the plane across. None when any of the three is
-        missing: a world plane compared with rig-frame heights reads hundreds
-        of studs off and passes any gate."""
+        wherever the place put it; the rig's own hip/root bone's rest height
+        in the rig frame (rest.json) carries the plane across. None when any
+        of the three is missing: a world plane compared with rig-frame
+        heights reads hundreds of studs off and passes any gate.
+
+        The hip bone is `stages.groundfit.result.hipBone`: the bone
+        `lowerTorsoY` actually measured -- "LowerTorso" for an R15-shaped rig,
+        or `False` when groundfit fell back to the mesh's own geometric centre
+        (no LowerTorso, and a centre point has no rest.json entry to carry the
+        plane across). A manifest with no `hipBone` key (written before this
+        field existed) falls back to `stages.rig.report.root` (the rig's own
+        identified root bone), then the literal "LowerTorso" -- the behavior
+        for a manifest with no rig report at all (an adopted rig, or one
+        prepped before the rig report recorded `root`)."""
         plane = _dig(self.m, "stages.groundfit.result.feetPlane")
         hips = _dig(self.m, "stages.groundfit.result.lowerTorsoY")
-        if plane is None or hips is None or not self.rest or "LowerTorso" not in self.rest:
+        if plane is None or hips is None or not self.rest:
             return None
-        return metrics._world_y(self.rest, "LowerTorso") - (float(hips) - float(plane))
+        hip_bone = _dig(self.m, "stages.groundfit.result.hipBone")
+        if hip_bone is None:
+            root = _root_bone(self.m)
+        elif hip_bone is False:
+            return None
+        else:
+            root = hip_bone
+        if root not in self.rest:
+            return None
+        return metrics._world_y(self.rest, root) - (float(hips) - float(plane))
+
+
+def _root_bone(m):
+    """The rig's own identified root/hip bone (`stages.rig.report.root`),
+    falling back to the fixed R15 name for a manifest with no rig report (an
+    adopted rig, or one prepped before the rig report recorded `root`)."""
+    return _dig(m, "stages.rig.report.root") or "LowerTorso"
+
+
+def _report_bones_excluding_root(m, present_in):
+    """`stages.rig.report.bones` (the prepped rig's verbatim armature, root
+    bone included) with the rig's own root dropped, UNLESS it is actually a member of
+    `present_in` -- `dump_rest` excludes the root bone itself (poses.py's own
+    docstring: rest.json "carries every bone of the rig but the root node"),
+    so a report that lists it (every report does: an older one predating
+    `report.root` had it too, as the synthesized "HumanoidRootNode") would
+    otherwise never agree with a rest dump or rest.json's own bone list,
+    which never carries it. None when there is no bone list to read.
+    `present_in` is whatever the comparison's OTHER side is -- `ctx.rest` (a
+    dict) or `stages.rest.bones` (a list) -- membership works on either."""
+    reported = _dig(m, "stages.rig.report.bones")
+    if not isinstance(reported, (list, tuple)):
+        return None
+    root = _dig(m, "stages.rig.report.root") or "HumanoidRootNode"
+    return [b for b in reported if b != root or b in present_in]
+
+
+def _rest_has(ctx, *names):
+    """True when every named bone is in the rest dump. The N/A rule for a row
+    that needs a bone the rig may not have (a foot, a hand): checked before
+    the row is even scored, so a rig without one reads PEND (never PASS, never
+    a misleading FAIL) rather than crashing on a missing key."""
+    return ctx.rest is not None and all(n in ctx.rest for n in names)
+
+
+def _rest_has_any(ctx, *names):
+    """True when the rest dump has at least one of the named bones. The N/A
+    rule for a row that can be measured off ANY of several bones (E21's
+    striking limb: LeftFoot, RightFoot, LeftHand or RightHand) -- a rig with
+    none of them cannot be measured at all."""
+    return ctx.rest is not None and any(n in ctx.rest for n in names)
 
 
 def _row_E1(ctx):
@@ -247,14 +282,32 @@ def _row_E3(ctx):
 
 
 def _row_E3b(ctx):
-    """Triangles in the EXPORTED R15 mesh, written by blender/rig_r15.py after
-    its post-rig decimate. E3 measures the cooked mesh going INTO the rig; this
-    row measures what comes out, because vendors re-mesh: Tripo's animate_rig
-    returned 101,184 triangles regardless of the mesh task's face_limit, and
-    Meshy's rigging returned 21,023 for a 19,599-triangle input (both witnessed
-    2026-09-04). A report with no tris_r15 predates the measurement and reads
-    FAIL(missing), which is the honest verdict for an unmeasured gate."""
+    """Triangles in the EXPORTED, post-prep mesh, written by
+    blender/rig_prep.py after its post-rig decimate. E3 measures the cooked
+    mesh going INTO the rig; this row measures what comes out, because
+    vendors re-mesh: Tripo's animate_rig returned 101,184 triangles regardless
+    of the mesh task's face_limit, and Meshy's rigging returned 21,023 for a
+    19,599-triangle input (both witnessed 2026-09-04). A report with no
+    tris_r15 predates the measurement and reads FAIL(missing), which is the
+    honest verdict for an unmeasured gate.
+
+    `stages.rig.report.tris_r15` is a single total today (the rig report
+    carries one skinned mesh); no producer currently writes a `parts`
+    breakdown. If a rig report ever DOES (a title with more than one skinned
+    MeshPart, whose combined triangles can exceed the cap while each part
+    stays under it), this row reads `stages.rig.report.parts` instead: `{part_name: {"tris":
+    int, ...}}`, and checks EACH part against the cap rather than their sum,
+    since Roblox enforces the cap per MeshPart."""
+    parts = _dig(ctx.m, "stages.rig.report.parts")
+    if isinstance(parts, dict) and parts:
+        return {name: p.get("tris") for name, p in parts.items() if isinstance(p, dict)}
     return _dig(ctx.m, "stages.rig.report.tris_r15")
+
+
+def _row_E3b_check(v):
+    if isinstance(v, dict):
+        return bool(v) and all(_is_number(t) and t <= 20000 for t in v.values())
+    return _is_number(v) and v <= 20000
 
 
 def _row_E4(ctx):
@@ -274,15 +327,25 @@ def _row_E6(ctx):
 
 
 def _row_E7(ctx):
-    """Bone COUNT. rig_r15.py writes `report.bones` as the sorted list of the
-    surviving bone names (that is what the R6 conversion test pins, and the
-    names are what makes a short report diagnosable); this row is the count, so
-    fold a list down to its length here rather than having the producer write a
-    number and throw the names away."""
-    v = _dig(ctx.m, "stages.rig.report.bones")
-    if isinstance(v, (list, tuple)):
-        return len(v)
-    return v
+    """The rig's bone count, from Studio's rest dump (`stages.rest.bones`,
+    every bone the dump carries), against the rig report's own record
+    (`stages.rig.report.bones`, the prepped rig's verbatim list, however many
+    bones it has -- no fixed 15/16 target any more). A mismatch
+    means something was lost or gained crossing into Studio (an invalid
+    Roblox instance name, a duplicate, an import quirk); None (missing
+    evidence) until both sides exist.
+
+    `dump_rest` excludes the rig's own root bone (the same seam E11 accounts
+    for): `stages.rig.report.bones` is the verbatim armature, root included,
+    so it is dropped from `reported` before comparing, unless the dump
+    happens to include it anyway."""
+    dumped = _dig(ctx.m, "stages.rest.bones")
+    if not isinstance(dumped, (list, tuple)):
+        return None
+    reported = _report_bones_excluding_root(ctx.m, dumped)
+    if reported is None:
+        return None
+    return {"reported": len(reported), "dumped": len(dumped)}
 
 
 def _row_E8(ctx):
@@ -290,9 +353,21 @@ def _row_E8(ctx):
 
 
 def _row_E9(ctx):
-    """Distance the armature origin moved to sit on the root bone. rig_r15.py
-    writes `report.root_offset` as the [x, y, z] vector it shifted by; take its
-    magnitude. A bare number (an older report) is still accepted."""
+    """Distance the armature origin moved to sit on the rig's own root bone
+    (`stages.rig.report.root`) -- rig_prep.py writes `report.root_offset`
+    as the [x, y, z] vector it shifted by; take its magnitude. A bare number
+    (an older report) is still accepted.
+
+    Not gated, and not scored at all (judge="report" below): a rig whose own
+    root bone already sits at world origin (measured on most real rigs)
+    legitimately reads 0 here, which a fixed `> 0.2` gate -- written when
+    every R15 conversion synthesized a NEW root bone away from the origin, so
+    it was never 0 -- would read as a false FAIL, and a passing check_fn under
+    judge="auto" would print as a false PASS just as misleadingly. There is no
+    name-agnostic replacement gate this row can score, since where
+    `HumanoidRootPart` sits relative to this bone is itself a per-rig choice
+    now; it reports the vector's magnitude for a human to read, with no
+    verdict."""
     v = _dig(ctx.m, "stages.rig.report.root_offset")
     if v is None:
         return None
@@ -301,31 +376,27 @@ def _row_E9(ctx):
     return abs(v)
 
 
-def _row_E10(ctx):
+def _row_E11(ctx):
+    """Dump complete/orthonormal, against the RIG'S OWN bones
+    (`stages.rig.report.bones`), recomputed here from `ctx.rest` rather than
+    trusting `stages.rest.result` -- `studio.py`'s `dump_rest` ingest computes
+    that stored result the same way (against the rig's own report, falling
+    back to the fixed R15 set when the manifest has no rig report), so the two
+    agree; this row is independent of that ingest rather than dependent on it.
+    Falls back to the fixed R15 set when the manifest has no rig report (an
+    adopted rig, or one prepped before the rig report recorded `root`).
+
+    The rig report's OWN root bone is dropped from the expected set unless it
+    is actually present in the dump: `dump_rest` excludes the root bone
+    itself (poses.py's own docstring: rest.json "carries every bone of the
+    rig but the root node"), so a rig report that lists it (`report.bones`
+    is the verbatim armature, root included; an older report predating
+    `report.root` had it too, as the synthesized "HumanoidRootNode") would
+    otherwise read a permanent false "missing" for every rig, old or new."""
     if ctx.rest is None:
         return None
-    feet_y = ctx.feet_y()
-    if feet_y is None:
-        return None
-    return metrics.shoulder_ratio(ctx.rest, feet_y)
-
-
-def _row_E10b(ctx):
-    """Offline skeleton fit: shoulder-bone separation / mesh span, written by
-    blender/rig_r15.py off the RAW vendor rig. Catches a skeleton fitted to a
-    mesh facing the wrong way before anything reaches Studio."""
-    return _dig(ctx.m, "stages.rig.report.shoulder_sep_frac")
-
-
-def _row_E10c(ctx):
-    """Worst left/right weighted-vertex balance over the R15 keeper pairs. Not a
-    gate: it is the diagnostic that names skinning bleed (leg B's forearms, 8062
-    against 734), and no threshold for it has been measured."""
-    return _dig(ctx.m, "stages.rig.report.symmetry_min_frac")
-
-
-def _row_E11(ctx):
-    return _dig(ctx.m, "stages.rest.result")
+    rig_bones = _report_bones_excluding_root(ctx.m, ctx.rest)
+    return metrics.rest_dump_checks(ctx.rest, rig_bones=rig_bones)
 
 
 def _row_E12(ctx):
@@ -456,13 +527,6 @@ def _row_E14(ctx):
     return _probe_gap(ctx, "far", require_play=True)
 
 
-def _clip_metric(ctx, clip, fn):
-    poses = ctx.clip_poses.get(clip)
-    if not poses or "frames" not in poses:
-        return None
-    return fn(poses)
-
-
 def _row_E15(ctx):
     """Walk cycle length as the game PLAYS it. `<Clip>.poses.json`'s frame
     `t`s are raw, authored seconds (kfs.write, not transfer(), applies the
@@ -496,17 +560,18 @@ def e15_limit(height_studs):
     return E15_LIMIT_S * math.sqrt(float(height_studs) / E15_REF_HEIGHT)
 
 
-def _row_E16(ctx):
-    traj = ctx.clip_traj.get("Walk")
-    return metrics.foot_lift(traj) if traj else None
+# The one foot bone the treadmill tracks; studio.RENDER_DEFAULTS' FOOT_BONE
+# reads it from here, so the step and the row gated on it name the same bone.
+E19_FOOT_BONE = "LeftFoot"
 
 
-def _row_E17(ctx):
-    return _clip_metric(ctx, "Walk", lambda p: metrics.hip_twist_deg(p["frames"]))
-
-
-def _row_E18(ctx):
-    return _clip_metric(ctx, "Walk", lambda p: metrics.knee_twist_frac(p["frames"]))
+def _e19_missing_note(ctx):
+    """E19's `note` for a rig whose rest dump has no E19_FOOT_BONE: the row
+    reads PEND either way, and without this a rig that cannot be measured
+    looks exactly like one whose rest has not been dumped yet."""
+    if ctx.rest is None or _rest_has(ctx, E19_FOOT_BONE):
+        return None
+    return "N/A: rig has no bone named %s to treadmill" % E19_FOOT_BONE
 
 
 def _row_E19(ctx):
@@ -520,7 +585,13 @@ def _row_E19(ctx):
     step `treadmill_scaled`), compared straight against `m["walk_speed"]`,
     the game-side Humanoid.WalkSpeed. None (PEND) until that second run and
     walk_speed both exist; a scaled run recorded under a different
-    animSpeedScale than the manifest now carries is stale and also PEND."""
+    animSpeedScale than the manifest now carries is stale and also PEND.
+
+    treadmill.luau tracks the bone named `FOOT_BONE` (default "LeftFoot",
+    `studio.emit`'s param); this row is a GATE only for a rig the rest dump
+    records that bone for (`build_rows`' own `_rest_has` check on the `add()`
+    call) -- a rig without it reads PEND, never a false FAIL on a
+    measurement the rig has no bone to make."""
     scaled = _dig(ctx.m, "stages.clips.treadmill_scaled")
     scale = _dig(ctx.m, "stages.clips.animSpeedScale")
     walk_speed = ctx.m.get("walk_speed")
@@ -559,12 +630,17 @@ def _row_E21(ctx):
     the sha256 of that file, rest.json and the Slam's poses doc; it is read
     only while all three still match the files on disk. None otherwise, or when
     it was never measured or the plane cannot be placed; E21 is a gate only for
-    a title with a Slam clip (`_has_slam`), so there a missing or stale
-    measurement reads FAIL (missing)."""
+    a title with a Slam clip (`_has_slam`) that the rest dump carries at
+    least one striking-limb bone for (`_rest_has_any`), so there a missing or
+    stale measurement reads FAIL (missing) -- a rig with none of those bones
+    reads PEND instead of a real value: `add()`'s gate alone cannot turn a
+    real number into PEND, since a value is only ever a verdict away from
+    PASS/FAIL once `add()` sees it, so this row itself withholds the value
+    when the rig has none of the bones a strike could be measured on."""
     item = _dig(ctx.m, "stages.clips.items.Slam") or {}
     c = item.get("contact")
     feet_y = ctx.feet_y()
-    if not c or feet_y is None:
+    if not c or feet_y is None or not _rest_has_any(ctx, *E21_STRIKE_BONES):
         return None
     files = ((c.get("rig_mesh"), c.get("rig_sha256")), (str(ctx.out / "rest.json"), c.get("rest_sha256")),
              (item.get("poses"), c.get("poses_sha256")))
@@ -583,6 +659,23 @@ def e21_limit(m):
 
 def _has_slam(m):
     return _dig(m, "stages.clips.items.Slam") is not None
+
+
+# The bones a slam's striking limb could be measured on: the four impact.py
+# itself tracks, read from there so the two cannot drift apart.
+E21_STRIKE_BONES = impact.BONES
+
+
+def _e21_missing_note(ctx):
+    """E21's `note`: a title with no Slam clip at all reads PEND note-less --
+    there is nothing to explain. A title WITH a Slam clip whose rest dump has
+    none of E21_STRIKE_BONES also reads PEND (the row's own gate), and without
+    a note the two cases are byte-identical rows (pass=None, gate=False,
+    value=None) with no way to tell them apart; this names the bones the rig
+    lacks, so only the second case gets a note."""
+    if not _has_slam(ctx.m) or _rest_has_any(ctx, *E21_STRIKE_BONES):
+        return None
+    return "N/A: rig has none of %s to strike with" % ", ".join(E21_STRIKE_BONES)
 
 
 def _row_E22(ctx):
@@ -724,6 +817,14 @@ def _bench_unusable(bench, timeline):
     """Why a bench cannot be judged, or None when it can."""
     if not isinstance(bench, dict):
         return "no bench recorded"
+    missing = bench.get("missingBones")
+    if missing:
+        # bench_clip.luau reports the HIPS_BONE/HEAD_BONE/LFOOT_BONE/RFOOT_BONE
+        # names it could not find on this rig: a rig without one of them (a
+        # non-R15-named rig; a spider has neither feet nor a hip in that sense)
+        # cannot be judged by this bench, named rather than left to read the
+        # generic "no played samples" a missing bone also produces.
+        return "rig has no bone named %s" % ", ".join(sorted(missing))
     if bench.get("frozen") is not True:
         # endedPlaying is track.IsPlaying when the bench stopped sampling.
         if bench.get("endedPlaying") is True:
@@ -779,14 +880,19 @@ def judge_readings(m, clip, motion, readings):
 
 def bench_verdict(m, clip):
     """One benched clip against the bench gates: `{motion, readings, checks,
-    breaches, unusable}`. `unusable` says why the bench cannot be judged (none
-    recorded, not frozen, or held short of the clip's end); then `readings` is
-    None and every check is None. Otherwise `readings` is metrics.bench_readings
-    and `checks`/`breaches` are judge_readings'."""
+    breaches, unusable, bones_missing}`. `unusable` says why the bench cannot
+    be judged (none recorded, not frozen, held short of the clip's end, or a
+    bone the rig lacks); then `readings` is None and every check is None.
+    Otherwise `readings` is metrics.bench_readings and `checks`/`breaches` are
+    judge_readings'. `bones_missing` is True specifically when the rig lacks a
+    bone bench_clip.luau needs (`bench.missingBones`) -- E30-E32's own N/A
+    rule (`_bench_row`) reads this to tell "this rig cannot be judged at all"
+    apart from a genuine bench failure, which must still FAIL."""
     motion = clip_motion(m, clip)
     bench = _dig(m, "stages.clips.items.%s.bench" % clip)
     timeline = _bench_timeline(m, clip, bench) if isinstance(bench, dict) else None
     unusable = _bench_unusable(bench, timeline)
+    bones_missing = isinstance(bench, dict) and bool(bench.get("missingBones"))
     readings = None
     if unusable is None:
         readings = metrics.bench_readings(timeline, bench.get("soleY"), bench.get("restAnkleY"),
@@ -795,7 +901,7 @@ def bench_verdict(m, clip):
             unusable = "timeline has no played samples or no sole plane"
     checks, breaches = judge_readings(m, clip, motion, readings)
     return {"motion": motion, "readings": readings, "checks": checks, "breaches": breaches,
-            "unusable": unusable}
+            "unusable": unusable, "bones_missing": bones_missing}
 
 
 def _bench_verdicts(ctx):
@@ -807,19 +913,41 @@ def _bench_verdicts(ctx):
 
 def _bench_row(ctx, checks, motions):
     """Clips failing any of `checks` (a clip with no usable bench is listed as
-    `<clip> (no bench: <why>)`), over the clips whose motion is in `motions`; None when
-    no clip is in scope."""
+    `<clip> (no bench: <why>)`), over the clips whose motion is in `motions`,
+    EXCLUDING a clip whose bench could not be judged only because the rig
+    lacks a bone bench_clip.luau needs (`bones_missing`) -- that clip is N/A,
+    not failing (`_bench_missing_note` names it separately). None when no
+    clip is in scope, or when every clip in scope is bones_missing (nothing
+    on this rig for this motion class can be judged at all): the row reads
+    PEND either way, not a false FAIL on a rig with no such bone."""
     scoped = {c: v for c, v in ctx.bench.items() if v["motion"] in motions}
     if not scoped:
         return None
+    judged = {c: v for c, v in scoped.items() if not v.get("bones_missing")}
+    if not judged:
+        return None
     failing = []
-    for clip, v in scoped.items():
+    for clip, v in judged.items():
         results = [v["checks"].get(c) for c in checks if c in v["checks"]]
         if any(r is None for r in results):
             failing.append("%s (no bench: %s)" % (clip, v.get("unusable") or "unmeasured"))
         elif not all(results):
             failing.append(clip)
     return failing
+
+
+def _bench_missing_note(motions):
+    """The reason string for E30-E32's `note`: which clips of `motions`'
+    scope could not be judged because the rig lacks a bone bench_clip.luau
+    needs, and why -- named even when the row overall still passes (some
+    clips judged, others not) or reads PEND (none could be)."""
+    def note(ctx):
+        missing = [(c, v["unusable"]) for c, v in ctx.bench.items()
+                  if v["motion"] in motions and v.get("bones_missing")]
+        if not missing:
+            return None
+        return "N/A: " + "; ".join("%s (%s)" % (c, reason) for c, reason in sorted(missing))
+    return note
 
 
 def _bench_readings_fn(keys_by_motion, label=None):
@@ -913,10 +1041,11 @@ def build_rows(ctx):
     rows = []
 
     def add(row_id, stage, metric_desc, judge, gate, evidence, get_fn, check_fn, threshold_desc,
-            readings_fn=None):
+            readings_fn=None, note_fn=None):
         value = get_fn(ctx)
         if judge != "auto":
-            # human / capture rows: the runner reports presence, never a verdict.
+            # human / capture / report rows: the runner reports presence (or
+            # a value), never a verdict.
             passed = None
         elif value is None:
             passed = False if gate else None
@@ -935,6 +1064,14 @@ def build_rows(ctx):
             readings = readings_fn(ctx)
             if readings is not None:
                 row["readings"] = readings
+        if note_fn is not None:
+            # A plain-text reason, shown but never scored (`value`/`pass` are
+            # unchanged): E30-E32 name which clip a missing bone excluded from
+            # judgment, even when the row itself still passes or fails on the
+            # clips it COULD judge, or reads PEND because none of them could be.
+            note = note_fn(ctx)
+            if note:
+                row["note"] = note
         rows.append(row)
 
     add("E1", "plate", "limb gaps", "auto", False, "stages.plate.gaps_ok", _row_E1,
@@ -942,27 +1079,27 @@ def build_rows(ctx):
     add("E2", "plate", "approval", "human", False, "stages.plate.media_id",
         lambda c: _dig(c.m, "stages.plate.media_id"), _truthy, "one plate approved")
     add("E3", "mesh", "triangle count", "auto", True, "stages.mesh.report.tris_out", _row_E3, _le(20000), "<= 20000")
-    add("E3b", "rig", "R15 triangle count (post-rig)", "auto", True, "stages.rig.report.tris_r15",
-        _row_E3b, _le(20000), "<= 20000 (vendors re-mesh; measured on the exported R15)")
+    add("E3b", "rig", "triangle count (post-rig)", "auto", True, "stages.rig.report.tris_r15 (or .parts, per part)",
+        _row_E3b, _row_E3b_check, "<= 20000 per part (vendors re-mesh; measured on the exported, post-prep mesh)")
     add("E4", "mesh", "shells", "auto", False, "stages.mesh.report.shells", _row_E4, _eq(1), "== 1 (not gated)")
     add("E5", "mesh", "base-color texture present", "auto", True, "mesh.has_basecolor", _row_E5, _truthy, "true")
     # %.3f, not %.2f: the calibrated threshold is 0.389 and printing ">= 0.39"
     # would state a number the gate does not use.
     add("E6", "mesh", "silhouette IoU vs plate", "auto", True, "mesh.silhouette_iou", _row_E6,
         _ge(CALIBRATION["E6"]["value"]), ">= %.3f%s" % (CALIBRATION["E6"]["value"], "" if CALIBRATION["E6"]["calibrated"] else " (UNCALIBRATED, Step 7)"))
-    add("E7", "rig", "bone count", "auto", True, "stages.rig.report.bones", _row_E7, _eq(16), "== 16")
+    add("E7", "rig", "bone count", "auto", True, "stages.rest.bones vs stages.rig.report.bones", _row_E7,
+        lambda v: v["reported"] == v["dumped"], "the rest dump's bone count matches the rig report's")
     add("E8", "rig", "unweighted vertex fraction", "auto", True, "stages.rig.report.unweighted_frac", _row_E8, _le(0.01), "<= 0.01")
-    add("E9", "rig", "root offset from torso", "auto", True, "stages.rig.report.root_offset", _row_E9, lambda v: v > 0.2, "> 0.2")
-    add("E10", "rig", "shoulder ratio", "auto", True, "eval.rig.shoulder_ratio", _row_E10,
-        _ge(CALIBRATION["E10"]["value"]), ">= %.2f%s" % (CALIBRATION["E10"]["value"], "" if CALIBRATION["E10"]["calibrated"] else " (UNCALIBRATED, Step 7)"))
-    add("E10b", "rig", "skeleton fit (shoulder sep / span)", "auto", True,
-        "stages.rig.report.shoulder_sep_frac", _row_E10b, _ge(CALIBRATION["E10b"]["value"]),
-        ">= %.2f (offline, before any Studio step)" % CALIBRATION["E10b"]["value"])
-    add("E10c", "rig", "skinning L/R symmetry", "auto", False,
-        "stages.rig.report.symmetry_min_frac", _row_E10c, _ge(CALIBRATION["E10c"]["value"]),
-        ">= %.2f%s" % (CALIBRATION["E10c"]["value"],
-                       "" if CALIBRATION["E10c"]["calibrated"] else " (UNCALIBRATED, advisory)"))
-    add("E11", "rest", "dump complete/orthonormal", "auto", True, "stages.rest.result", _row_E11, _all_true, "all pass")
+    # judge="report", not "auto": a fixed gate here (the old `> 0.2`) is
+    # false for a root already at its own origin (`_ge(0.0)` under
+    # judge="auto" still computes a PASS/FAIL verdict, always PASS, which
+    # reads exactly like a real gate to anyone scanning the table).
+    # "report" reads like "human" (add()'s own judge != "auto" rule): no
+    # verdict at all, the value shown for a person to read.
+    add("E9", "rig", "root offset (rig's own root bone)", "report", False, "stages.rig.report.root_offset", _row_E9,
+        lambda v: None, "reported only (no fixed gate; a root already at its own origin legitimately reads 0)")
+    add("E11", "rest", "dump complete/orthonormal", "auto", True,
+        "rest.json vs stages.rig.report.bones", _row_E11, _all_true, "all pass")
     # The HumanoidRootPart the hip is measured against is sized from BODY HEIGHT
     # (0.15 x height, groundfit.root_box) rather than from spine spacing: the old
     # 2 x (UpperTorso.Y - LowerTorso.Y) rule read a skeleton property, so a
@@ -994,15 +1131,11 @@ def build_rows(ctx):
         _row_E15, _ge(e15_limit(ctx.m["height_studs"])),
         ">= %g s x sqrt(height / %g) = %.2f s, the cycle over animSpeedScale"
         % (E15_LIMIT_S, E15_REF_HEIGHT, e15_limit(ctx.m["height_studs"])))
-    add("E16", "clips", "Walk foot lift", "auto", True, "eval.clips.Walk.foot_lift", _row_E16,
-        lambda v: v >= 0.03 * ctx.m["height_studs"], ">= 0.03 x height")
-    # E18's 0.25 threshold is a discriminator, not an arbitrary round number:
-    # a library-authored walk measured 0.042 knee twist against 0.25-0.31 for
-    # an archive retarget of the same motion (2026-09-04 bake-off findings).
-    add("E17", "clips", "Walk hip twist", "auto", True, "eval.clips.Walk.hip_twist_deg", _row_E17, _le(25.0), "<= 25 deg")
-    add("E18", "clips", "Walk knee twist fraction", "auto", True, "eval.clips.Walk.knee_twist_frac", _row_E18, _le(0.25), "<= 0.25")
-    add("E19", "clips", "no slide (treadmill)", "auto", True, "stages.clips.treadmill_scaled", _row_E19,
-        _le(0.10), "post-scale stride within 10% of walkSpeed")
+    # treadmill.luau tracks the bone named FOOT_BONE (studio.emit's default
+    # "LeftFoot"); a rig the rest dump does not carry that bone for cannot be
+    # measured, so the gate is conditioned on it (PEND, never a false FAIL).
+    add("E19", "clips", "no slide (treadmill)", "auto", _rest_has(ctx, E19_FOOT_BONE), "stages.clips.treadmill_scaled",
+        _row_E19, _le(0.10), "post-scale stride within 10% of walkSpeed", note_fn=_e19_missing_note)
     # the impact delay (v) is SCALED (clips.impact() applies
     # timing.scale_time); clip_poses["Attack"]["clip_seconds"] is the RAW,
     # unscaled duration poses.py wrote -- comparing a scaled t against a raw
@@ -1015,11 +1148,18 @@ def build_rows(ctx):
         lambda v: 0.2 < v < (_dig(ctx.m, "stages.clips.items.Attack.scaled_seconds") or float("inf")) - 0.1,
         "0.2s < t < scaled clip_seconds - 0.1s")
     # a gate only for a title with a Slam clip: without one the row reads PEND
-    # (not applicable), and an Attack answers to no ground gate
-    add("E21", "clips", "slam reaches the ground", "auto", _has_slam(ctx.m), "eval.clips.Slam.impact_height",
+    # (not applicable), and an Attack answers to no ground gate. Also PEND for
+    # a rig the rest dump carries none of LeftFoot/RightFoot/LeftHand/
+    # RightHand for: `clips contact` (impact.py-style) has no striking limb to
+    # measure on such a rig, so a stale or absent measurement there is a
+    # structural N/A, not a failed one.
+    add("E21", "clips", "slam reaches the ground", "auto",
+        _has_slam(ctx.m) and _rest_has_any(ctx, *E21_STRIKE_BONES),
+        "eval.clips.Slam.impact_height",
         _row_E21, _between(-e21_limit(ctx.m), e21_limit(ctx.m)),
         "contact within +-%g x height = +-%.2f studs of the sole plane (proposal)"
-        % (bench_gates(ctx.m)["foot_contact_frac"], e21_limit(ctx.m)))
+        % (bench_gates(ctx.m)["foot_contact_frac"], e21_limit(ctx.m)),
+        note_fn=_e21_missing_note)
     add("E22", "clips", "naming law", "auto", True, "file name", _row_E22,
         lambda v: isinstance(v, list) and v and all(_no_brand(n) for n in v), "no brand word")
     add("E23", "wire", "recipe applied", "auto", True, "stages.wire.result", _row_E23, _wire_all_true, "all true")
@@ -1054,18 +1194,21 @@ def build_rows(ctx):
         "lowest sole within +-%.3f x height in place, +-%.3f x height travelling; fall: nothing below -%.3f x height"
         % (ctx.gates["foot_contact_frac"], ctx.gates["foot_contact_travel_frac"], ctx.gates["foot_contact_frac"]),
         readings_fn=_bench_readings_fn({"in_place": ("lowest_sole",), "travel": ("lowest_sole",),
-                                        "fall": ("lowest_point",)}, label=fc_label))
+                                        "fall": ("lowest_point",)}, label=fc_label),
+        note_fn=_bench_missing_note(fc_scope))
     add("E31", "clips", "root travel, in-place (bench)", "auto", _bench_row(ctx, ("root_travel", "root_travel_end"), ("in_place",)) is not None,
         "stages.clips.items.<Clip>.bench + <Clip>.bench.json",
         lambda c: _bench_row(c, ("root_travel", "root_travel_end"), ("in_place",)), lambda v: len(v) == 0,
         "hips travel <= %.2f x height, end <= %.2f x height from start"
         % (ctx.gates["root_travel_max_frac"], ctx.gates["root_travel_end_frac"]),
-        readings_fn=_bench_readings_fn({"in_place": ("root_travel_max", "root_travel_end")}))
+        readings_fn=_bench_readings_fn({"in_place": ("root_travel_max", "root_travel_end")}),
+        note_fn=_bench_missing_note(("in_place",)))
     add("E32", "clips", "fall ends on the ground (bench)", "auto", _bench_row(ctx, ("fall_end",), ("fall",)) is not None,
         "stages.clips.items.<Clip>.bench + <Clip>.bench.json",
         lambda c: _bench_row(c, ("fall_end",), ("fall",)), lambda v: len(v) == 0,
         "lowest end point within -%.3f .. +%.2f x height" % (ctx.gates["foot_contact_frac"], ctx.gates["fall_end_max_frac"]),
-        readings_fn=_bench_readings_fn({"fall": ("end_lowest",)}))
+        readings_fn=_bench_readings_fn({"fall": ("end_lowest",)}),
+        note_fn=_bench_missing_note(("fall",)))
     return rows
 
 
@@ -1088,6 +1231,8 @@ def _print_table(rows):
         print("%-3s %-10s %-30s %-7s %-14s %-6s" % (r["id"], r["stage"], r["metric"][:30], r["judge"], val_s, result))
         for line in _reading_lines(r):
             print(line)
+        if r.get("note"):
+            print("      %s" % r["note"])
 
 
 def _reading_lines(row):
@@ -1122,9 +1267,6 @@ def run(m, stage=None):
     def clip_block(clip):
         return {
             "cycle_seconds": _row_E15(ctx) if clip == "Walk" else None,
-            "foot_lift": _row_E16(ctx) if clip == "Walk" else None,
-            "hip_twist_deg": _row_E17(ctx) if clip == "Walk" else None,
-            "knee_twist_frac": _row_E18(ctx) if clip == "Walk" else None,
             "impact_height": _row_E21(ctx) if clip == "Slam" else None,
         }
 
@@ -1134,8 +1276,6 @@ def run(m, stage=None):
     # this run didn't re-measure.
     result = dict(ctx.eval_prior)
     result["mesh"] = {"has_basecolor": _row_E5(ctx), "silhouette_iou": _row_E6(ctx)}
-    result["rig"] = {"shoulder_ratio": _row_E10(ctx), "shoulder_sep_frac": _row_E10b(ctx),
-                     "symmetry_min_frac": _row_E10c(ctx)}
     result["clips"] = {clip: clip_block(clip) for clip in CLIP_NAMES}
     result["cost"] = _cost_detail(ctx)
     result["bench"] = ctx.bench

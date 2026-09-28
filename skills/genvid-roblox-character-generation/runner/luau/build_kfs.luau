@@ -24,6 +24,14 @@ local kfs = child(child(child(ServerStorage, "Assets"), "Anims"), "{{CLIP_NAME}}
 local exists = kfs ~= nil
 local isKfs = exists and kfs:IsA("KeyframeSequence")
 
+-- The rig's own root-node search name: kfs.write's root_node names the rig's
+-- OWN root bone (stages.rig.report.root) -- "GroundRoot", "Hips",
+-- whatever the rig calls it -- not only the classic "HumanoidRootNode".
+-- studio.emit sets this from the same rig report clips.build() fed kfs.write;
+-- the RENDER_DEFAULTS literal, "HumanoidRootNode", is unchanged for an
+-- adopted manifest (no rig report), which is kfs.write's own default too.
+local ROOT_BONE = "{{ROOT_BONE}}"
+
 local keyframes, lastTime, loop, priority, rootPose, rootNode = 0, 0, false, "", "", false
 if isKfs then
 	local frames = kfs:GetKeyframes()
@@ -34,11 +42,12 @@ if isKfs then
 	loop = kfs.Loop
 	priority = kfs.Priority.Name
 	-- The pose tree's root, from the first keyframe: HumanoidRootPart, with or
-	-- without a HumanoidRootNode pose under it (SKILL.md, clip transfer law 3).
+	-- without the rig's own root-node pose under it (SKILL.md, clip transfer
+	-- law 3).
 	local root = frames[1] and frames[1]:FindFirstChildOfClass("Pose")
 	if root then
 		rootPose = root.Name
-		rootNode = root:FindFirstChild("HumanoidRootNode") ~= nil
+		rootNode = root:FindFirstChild(ROOT_BONE) ~= nil
 	end
 end
 
@@ -48,7 +57,7 @@ end
 local okFolder, folder = pcall(function() return {{PARK_FOLDER}} end)
 local template = okFolder and folder and folder:FindFirstChild("{{TEMPLATE}}") or nil
 local templateFound = template ~= nil and template:IsA("Model")
-local templateHasNode = templateFound and template:FindFirstChild("HumanoidRootNode", true) ~= nil
+local templateHasNode = templateFound and template:FindFirstChild(ROOT_BONE, true) ~= nil
 local templateScale = templateFound and template:GetScale() or 0
 
 -- Returned as well as printed: execute_luau hands back the chunk's return

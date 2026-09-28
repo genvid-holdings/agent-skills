@@ -12,8 +12,50 @@ for _, d in model:GetDescendants() do if d:IsA("MeshPart") then table.insert(mes
 assert(#meshes > 0, "no MeshPart")
 local bones = {}
 for _, d in model:GetDescendants() do if d:IsA("Bone") then bones[d.Name] = d end end
-local lower, upper = bones.LowerTorso, bones.UpperTorso
-assert(lower and upper, "LowerTorso/UpperTorso missing")
+local CORNERS = { -0.5, 0.5 }
+-- Height and centre come from the WORLD-AXIS extent of the mesh's own part
+-- corners, never Model:GetBoundingBox(): that box is reported in the PIVOT
+-- frame, and the importer leaves a freshly imported skinned Model's pivot
+-- rotated 90 degrees about X, so its Y is the character's depth (witnessed
+-- 2026-09-04 on all three bake-off imports, scale.luau/zoo_capture.luau's own
+-- note). Restricted to MeshParts, not every BasePart: the 3D Importer's
+-- bone-holder part (the root bone's parent) is not the body and would skew
+-- the centre if it sat away from it.
+local function meshBoxCenter(parts)
+	local lo = Vector3.new(math.huge, math.huge, math.huge)
+	local hi = Vector3.new(-math.huge, -math.huge, -math.huge)
+	for _, mesh in parts do
+		local cf, s = mesh.CFrame, mesh.Size
+		for _, fx in CORNERS do
+			for _, fy in CORNERS do
+				for _, fz in CORNERS do
+					local p = cf:PointToWorldSpace(Vector3.new(s.X * fx, s.Y * fy, s.Z * fz))
+					lo = Vector3.new(math.min(lo.X, p.X), math.min(lo.Y, p.Y), math.min(lo.Z, p.Z))
+					hi = Vector3.new(math.max(hi.X, p.X), math.max(hi.Y, p.Y), math.max(hi.Z, p.Z))
+				end
+			end
+		end
+	end
+	return (lo + hi) / 2
+end
+-- Hip/root reference point for the sole-offset measurement below. LowerTorso
+-- when the rig has one (an R15-shaped rig -- byte-identical to before this
+-- change); no step requires it, so a rig with no such bone (a
+-- spider rooted at GroundRoot, a vendor rig rooted at Hips) falls back to the
+-- mesh's own geometric centre, no bone name needed at all. wire.luau places
+-- HumanoidRootPart at the same point by the same rule -- HipHeight is
+-- measured against the box wire builds, so the two must agree or the rig
+-- floats or sinks by half the difference (see the box-height note below).
+-- `hipBone` records which: the literal bone name a rest-frame reader (eval_cmd's
+-- feet_y) can look up rest.json by, or false when there is none to look up.
+local upper = bones.UpperTorso
+local hipBone = bones.LowerTorso and "LowerTorso" or false
+local lt
+if bones.LowerTorso then
+	lt = bones.LowerTorso.WorldPosition
+else
+	lt = meshBoxCenter(meshes)
+end
 -- feet plane = lowest vertex in world space (bones sit at ankles, not soles),
 -- over EVERY MeshPart: a multi-mesh import can list a small accessory mesh
 -- first, and whatever geometry is lowest is what meets the ground.
@@ -28,7 +70,7 @@ for _, mesh in meshes do
 	end
 	em:Destroy()
 end
-local lt, ut = lower.WorldPosition, upper.WorldPosition
+local ut = upper and upper.WorldPosition or nil
 -- HumanoidRootPart size from BODY HEIGHT, not from spine spacing. The bone gap
 -- 2 * (UpperTorso.Y - LowerTorso.Y) is a property of the skeleton: a Mixamo-
 -- convention rig maps Spine2 (high on the chest) to UpperTorso and gives h = 22
@@ -73,20 +115,44 @@ local function ik(name, kind, chainRoot, endEff)
 	c.Enabled = false; c.Weight = 1; c.SmoothTime = 0.1; c.Parent = hum
 	return c
 end
-ik("LeftFootIK", Enum.IKControlType.Position, bones.LeftUpperLeg, bones.LeftFoot)
-ik("RightFootIK", Enum.IKControlType.Position, bones.RightUpperLeg, bones.RightFoot)
-local look = ik("HeadLookIK", Enum.IKControlType.LookAt, bones.UpperTorso, bones.Head)
+-- Foot IK chains are built only for feet the rig has (the classic R15 names,
+-- as today, when present); a rig without them (a spider's own leg bones) gets
+-- no foot IK at all rather than indexing a nil chain root/end effector.
+if bones.LeftUpperLeg and bones.LeftFoot then
+	ik("LeftFootIK", Enum.IKControlType.Position, bones.LeftUpperLeg, bones.LeftFoot)
+end
+if bones.RightUpperLeg and bones.RightFoot then
+	ik("RightFootIK", Enum.IKControlType.Position, bones.RightUpperLeg, bones.RightFoot)
+end
+-- Head is required on every rig (rig ingest refuses one with none); the
+-- head-look chain runs from ITS OWN
+-- parent rather than a fixed UpperTorso, so an own-skeleton rig's neck/head
+-- hierarchy is followed whatever it's named. Byte-identical on an R15-shaped
+-- rig, where Head's parent is UpperTorso.
+local look = ik("HeadLookIK", Enum.IKControlType.LookAt, bones.Head.Parent, bones.Head)
 look.Weight = 0.6
 -- soleOffsetAttribute is read back off the model, not echoed: the anchored-
 -- placement consumer reads the ATTRIBUTE, so the attribute is what has to be
 -- shown to have landed.
 -- Returned as well as printed: execute_luau hands back the chunk's return
 -- value, not its console output.
-local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({ hipHeight = hip, feetPlane = minY,
+local resultTable = { hipHeight = hip, feetPlane = minY,
 	feetMesh = feetMesh, meshCount = #meshes,
-	rootSize = { rootSize.X, rootSize.Y, rootSize.Z }, lowerTorsoY = lt.Y, upperTorsoY = ut.Y,
+	-- lowerTorsoY keeps its name (eval_cmd.py reads this key regardless of
+	-- which bone or point it names): the hip/root reference's Y, whichever
+	-- of the two branches above set `lt`. hipBone names WHICH: a rest.json key
+	-- (eval_cmd's feet_y reads it) or false when the reference is the mesh's
+	-- own centre, not a bone -- there is no rest-frame entry to carry that
+	-- plane across, and feet_y must read that as "cannot place the plane,"
+	-- not silently subtract a different bone's height.
+	rootSize = { rootSize.X, rootSize.Y, rootSize.Z }, lowerTorsoY = lt.Y, hipBone = hipBone,
 	soleOffset = sole, soleOffsetAttribute = model:GetAttribute("{{SOLE_ATTR}}"),
 	targetHeight = height,
-	rigTypeR15 = hum.RigType == Enum.HumanoidRigType.R15 })
+	rigTypeR15 = hum.RigType == Enum.HumanoidRigType.R15 }
+-- upperTorsoY is diagnostic only (eval_cmd's E12 readings, report-only); an
+-- own-skeleton rig with no UpperTorso simply omits it, which that row already
+-- tolerates (None when either side of the spine-spacing reading is missing).
+if ut then resultTable.upperTorsoY = ut.Y end
+local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode(resultTable)
 print(runnerResult)
 return runnerResult

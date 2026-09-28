@@ -60,40 +60,61 @@ UAL_MAP = {
     "RightUpperLeg": "DEF-thigh.R", "RightLowerLeg": "DEF-shin.R", "RightFoot": "DEF-foot.R",
 }
 
-CLIP_MODES = {"names": None, "mixamo": MIXAMO_MAP, "ual": UAL_MAP}
+# The Meshy/Mixamo vendor convention (RENAME's own keys), inverted: R15 name ->
+# the vendor's own spelling for it. `--rename`/`--donor` clips (poses.py) used
+# to physically rename the CLIP's Blender armature onto R15 names before
+# matching by name; a rig kept on its own skeleton may not carry R15 names to
+# rename onto, so the match now runs the other way, through this table,
+# exactly like MIXAMO_MAP/UAL_MAP -- no bone in either the clip or the rig is
+# ever renamed.
+RENAME_TARGET_MAP = {r15: vendor for vendor, r15 in RENAME.items()}
+
+CLIP_MODES = {"names": None, "mixamo": MIXAMO_MAP, "ual": UAL_MAP, "rename": RENAME_TARGET_MAP}
 
 
 def clip_bone_map(rest_names, clip_bone_names, *, mode="names", prefix=""):
     """Which clip bone drives each rest bone, as `(src, held)`.
 
-    `rest_names` are the bones of the rig's rest dump: the fifteen R15 bones,
-    plus any extra bones the rig carries (wings, a jaw, cloth). An R15 bone is
-    read through the mode's table (`names`: its own name; `mixamo`: MIXAMO_MAP
-    behind the skeleton's `prefix`; `ual`: UAL_MAP), and a clip that lacks one
-    is refused. An extra bone is read by its own name (`prefix` + name first in
-    `mixamo` mode) when the clip has it; otherwise it is `held`: the transfer
-    leaves it at its rest pose, so one clip library serves rigs with and
-    without the extra bones.
+    `rest_names` are the bones of the rig's rest dump: every bone the rig
+    carries, however it names them -- a rig kept on its own skeleton has no
+    fixed 15-bone target. A rest bone is read through the mode's table when it
+    has one (`names`: none, matched by its own name; `mixamo`: MIXAMO_MAP
+    behind the skeleton's `prefix`; `ual`: UAL_MAP; `rename`: RENAME_TARGET_MAP,
+    the Meshy/Mixamo vendor spelling of an R15-shaped name), else by its own
+    name (`prefix` + name tried first in `mixamo` mode). `rename` mode also
+    matches a clip bone by its NORMALIZED name (`normalize()`: vendor prefix
+    stripped, alias folded) -- the same first pass the retired
+    `rename_to_r15` applied to the clip's own armature before matching it by
+    name, now applied to the lookup instead of the bones.
+
+    A rest bone the clip does not drive by any of these is `held`: the
+    transfer leaves it at its rest pose, whether it is one of the fifteen
+    classic R15 names or any other bone the rig carries. Nothing is ever
+    refused here -- a clip authored for a different rig than the one asked for
+    simply drives fewer bones (the caller sees this in `held`).
     """
     if mode not in CLIP_MODES:
         raise ValueError("unknown clip bone mode %r (one of %s)" % (mode, ", ".join(CLIP_MODES)))
-    table, have = CLIP_MODES[mode], set(clip_bone_names)
-    src, held, missing = {}, [], []
+    table = CLIP_MODES[mode]
+    if mode == "rename":
+        have = {}
+        for c in clip_bone_names:
+            have.setdefault(normalize(c), c)
+    else:
+        have = {c: c for c in clip_bone_names}
+    src, held = {}, []
     for n in rest_names:
-        if n in R15_BONES:
-            name = prefix + table[n] if table else n
-            if name in have:
-                src[n] = name
-            else:
-                missing.append(name)
-            continue
-        name = next((c for c in ((prefix + n, n) if mode == "mixamo" else (n,)) if c in have), None)
-        if name is None:
+        candidates = []
+        if table is not None and n in table:
+            candidates.append(prefix + table[n])
+        if mode == "mixamo":
+            candidates.append(prefix + n)
+        candidates.append(n)
+        original = next((have[c] for c in candidates if c in have), None)
+        if original is None:
             held.append(n)
         else:
-            src[n] = name
-    if missing:
-        raise ValueError("clip lacks bones: %s" % missing)
+            src[n] = original
     return src, held
 
 
@@ -107,13 +128,26 @@ ALIASES = {
     "Head1": "head_end",
 }
 
-def normalize(name):
-    """Strip a vendor prefix and fold aliases so RENAME/MERGE keys match."""
+def strip_vendor_prefix(name):
+    """Strip a vendor prefix only -- no alias fold. What the rig prep calls
+    (blender/rig_prep.py): with no RENAME/MERGE downstream of it any more, an
+    alias fold has no purpose there, and would rename an own-skeleton rig's
+    own bone if it happened to be spelled like an ALIASES key -- e.g. a bone
+    literally named `Neck` becoming `neck`. `normalize()` below still folds
+    aliases for callers that resolve names against RENAME/MERGE."""
     for p in PREFIXES:
         if name.startswith(p):
-            name = name[len(p):]
-            break
-    return ALIASES.get(name, name)
+            return name[len(p):]
+    return name
+
+
+def normalize(name):
+    """Strip a vendor prefix and fold aliases so RENAME/MERGE keys match. Used
+    by callers that read names against those tables -- the clip-transfer pose
+    reader (blender/poses.py) -- not by the rig prep, which uses
+    strip_vendor_prefix() instead (see its docstring)."""
+    stripped = strip_vendor_prefix(name)
+    return ALIASES.get(stripped, stripped)
 
 
 def ancestors(parents, name):

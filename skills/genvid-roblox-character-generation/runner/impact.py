@@ -58,3 +58,15 @@ def strike(traj, bones=BONES, prefer=None):
 def impact_time(traj, bones=BONES):
     hit = strike(traj, bones)
     return 0.0 if hit is None else hit[1]
+
+
+def has_any_bone(traj, bones=BONES):
+    """Whether `traj` carries a trajectory for at least one of `bones` at all
+    (any samples, whatever they do) -- a rig kept on its own skeleton may have
+    none of the four (a spider has no bone named any of
+    LeftFoot/RightFoot/LeftHand/RightHand). `impact_time()` returns 0.0 both
+    for that case and for a real clip on a rig that HAS these bones but never
+    drops one; this distinguishes them so a caller's refusal names the right
+    reason instead of suggesting "try a different candidate" to a rig that has
+    no candidate to try."""
+    return any(traj.get(b) for b in bones)

@@ -1,5 +1,5 @@
 -- EDIT mode. Read what the clip chain needs from a template that is ALREADY
--- parked under the park folder (adopt.py): Model:GetScale (what
+-- parked under the park folder: Model:GetScale (what
 -- `clips build` divides root motion by), the hip and sole attributes the bench
 -- uses for its sole plane, the bone list, and whether the rig carries a
 -- HumanoidRootNode (`clips build` writes the node pose only when it does; a

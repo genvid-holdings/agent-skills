@@ -17,6 +17,19 @@ import manifest, cost
 BODY_MODE = "stdin"   # the confirmed mode; "shorthand" is the alternative
 MODEL_LINK = "cast_member_model"   # prefix must equal the asset type
 
+# The skeleton-agnostic conformance stage a skinned rig binds and records at:
+# the backend validates it on its own terms -- a per-MeshPart triangle cap, a
+# max-4-bone-influence limit, and a texture size cap -- and reports facing and
+# materials rather than marking the row nonconformant on them. A rig kept on
+# its own skeleton, whatever shape it has, binds here.
+RIGGED_STAGE = "roblox/rigged"
+# The narrower, older stage for a rig on the real R15 skeleton; it stays in use
+# for that case (see the character-generation skill's registration guidance).
+# Named here, not just inlined, so a reader of a rig row bound before
+# RIGGED_STAGE existed can still find it: fall back to this stage when a
+# manifest carries no recorded stage of its own.
+LEGACY_R15_RIGGED_STAGE = "roblox/r15-rigged"
+
 # The restish-based CLI sets no request timeout of its own, and calls were
 # witnessed hanging with no error (2026-09-23): `genvid get-media-signed-urls`,
 # and binds for 400-900 s while the boundary never saw the request. Every call

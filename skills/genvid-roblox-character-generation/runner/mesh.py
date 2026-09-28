@@ -306,7 +306,7 @@ def bind(m, run=subprocess.run, supersede=False):
               "converted_from": st.get("converted_from")}
     # No target/stage: the unrigged mesh has no Roblox destination, and the boundary
     # refuses target="roblox" + stage="roblox/mesh" ("not a known destination and
-    # pipeline stage", 2026-09-23). The rig row carries roblox/r15-rigged.
+    # pipeline stage", 2026-09-23). The rig row carries roblox/rigged.
     kw = request.bind_kwargs(rec, runner=runner, artifact=st["artifact"])
     if bound:
         kw["params"]["supersedes_media_id"] = str(bound)

@@ -1,16 +1,27 @@
 #!/usr/bin/env python
-"""Stage 3 (runner): convert a vendor-rigged character (Mixamo-convention
-skeleton) into an R15-compatible skinned FBX for the Roblox 3D Importer. No
-Auto-Setup anywhere: the mesh that ships is the mesh the vendor skinned.
+"""Stage 3 (runner): prepare a rigged character -- ANY skeleton, the rig's
+own bones (sockets included) -- for the Roblox 3D Importer. There is no R15
+conversion here: no bone is folded away, no bone is inserted, and no bone's
+identity is changed -- the one exception is a vendor container prefix (e.g.
+`mixamorig:`) stripped off a bone's name when present, which is a spelling
+cleanup, not a rename to a different bone. The mesh and skeleton that ship
+are the mesh and skeleton the author (or rigging model) delivered. No
+Auto-Setup anywhere: the mesh that ships is the mesh the author skinned.
 
 Run headless:
-  blender --background --python rig_r15.py -- <rigged.glb|.fbx> <out.fbx> [stylized.png]
+  blender --background --python rig_prep.py -- <rigged.glb|.fbx> <out.fbx> [stylized.png]
 
-What it does: normalize vendor bone spellings, rename the 15 keeper bones to
-R15 names, fold the extra bones' weights into their R15 neighbors (leaf-up so
-chains reparent cleanly), add a Root bone, export FBX with embedded textures,
-decimate back under Roblox's 20,000-triangle skinned-mesh cap when the vendor
-re-meshed over it, and write `rig.report.json` beside the output.
+What it does: strip a vendor container prefix off each bone's name if it has
+one (`rigtables.strip_vendor_prefix` -- prefix only, no spelling-alias fold:
+that fold exists for RENAME/MERGE lookups this script no longer makes, and
+folding it here would silently rename an own-skeleton rig's own bone, e.g.
+`Neck` -> `neck`), relocate the armature's origin onto the rig's own root
+bone so the imported model doesn't float a body-height off the ground,
+export FBX with embedded textures, downsize any embedded texture over
+2048 px on a side (the Roblox importer rejects a larger one), decimate back
+under Roblox's 20,000-triangle skinned-mesh cap when the source re-meshed
+over it, and write `rig.report.json` (the full bone list, kept verbatim)
+beside the output.
 
 The optional third argument swaps the material's base-color image for a
 stylized texture BEFORE export. This is the only reliable way to deliver a
@@ -21,13 +32,19 @@ render (front + three-quarter view, <out.fbx>.view0.png / .view1.png) is
 written alongside every export so the look can be judged without spending a
 Studio import; those two frames are the rig-preview media the runner binds.
 
-Ported from the retired pipeline's stage_f_rig.py. Changes from that source:
-the RENAME/MERGE tables now come from the runner's `rigtables` module (single
-source shared with the pose transfer); every bone name is normalized first so
-a Tripo `spec=mixamo` skeleton (`mixamorig:` prefixes, `Spine1`/`Spine2`)
-lands on the same table; `.fbx` input is accepted alongside `.glb`; a missing
-keeper bone is a recorded WARN rather than a hard assert, with the verdict
-carried in rig.report.json and a non-zero exit.
+Formerly `rig_r15.py`, ported from the retired pipeline's stage_f_rig.py and
+converted every rig to the 15-bone R15 skeleton (Mixamo-style rename, a
+leaf-up weight fold, a synthesized HumanoidRootNode). That conversion is
+retired: a character rig keeps its own skeleton end to end, so the
+RENAME/MERGE tables (still used by the clip-transfer pose reader, which reads
+several skeleton conventions) and the synthesized root are gone from this
+script. What remains -- vendor-prefix stripping (no alias fold: see
+`strip_vendor_prefix` below), the texture swap, the preview render, the
+post-rig triangle cap, and the FBX+GLB twin export with its yaw fix -- has no
+skeleton-shape dependency, so it runs unchanged on any rig. A shoulder-based
+facing turn (below) still fires only when the rig
+happens to carry R15-style shoulder names (`LeftUpperArm`/`RightUpperArm`);
+it is a no-op, recorded as such, on a rig that does not.
 
 The FBX is exported once and, beside it, the SAME scene is exported a second
 time as glTF-binary: Genvid's roblox/r15-rigged conformance profile (spec
@@ -58,7 +75,10 @@ import bpy
 
 # rigtables lives in the runner package dir, one level up from blender/.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from rigtables import RENAME, merge_plan, normalize  # noqa: E402
+from rigtables import strip_vendor_prefix  # noqa: E402
+
+# Roblox's importer rejects an embedded texture wider or taller than this.
+MAX_TEXTURE_PX = 2048
 
 
 def swap_basecolor(meshes, texture_path):
@@ -106,6 +126,35 @@ def swap_basecolor(meshes, texture_path):
                     tree.nodes.remove(node)
     print("swapped %d base-color node(s) -> %s" % (swapped, texture_path))
     assert swapped > 0, "no base-color image node found to swap"
+
+
+def downsize_textures(cap=MAX_TEXTURE_PX):
+    """Shrink every loaded image over `cap` px on a side to fit within it,
+    aspect preserved, and returns the names shrunk.
+
+    The Roblox 3D Importer refuses an embedded texture wider or taller than
+    2048 px, so a source mesh that shipped a 4096 atlas would otherwise be
+    refused at import, downstream of this script and with no useful error
+    pointing back here. `Image.scale()` only rewrites the in-memory pixel
+    buffer -- it does NOT touch `image.filepath`, and the FBX exporter's
+    `path_mode="COPY"` copies the file AT that path, so a scaled image left
+    at its original `filepath` would still embed the original, oversize
+    bytes. `pack()` after scaling makes the image self-contained (its pixels
+    become the packed data the exporter reads), which is what makes the
+    scale actually reach the export.
+    """
+    shrunk = []
+    for img in bpy.data.images:
+        w, h = img.size
+        if w <= cap and h <= cap:
+            continue
+        scale = float(cap) / float(max(w, h))
+        new_w, new_h = max(1, round(w * scale)), max(1, round(h * scale))
+        img.scale(new_w, new_h)
+        img.pack()
+        shrunk.append({"name": img.name, "from": [w, h], "to": [new_w, new_h]})
+        print("downsized texture %s: %dx%d -> %dx%d" % (img.name, w, h, new_w, new_h))
+    return shrunk
 
 
 def preview_render(out_path):
@@ -398,6 +447,20 @@ def turn_rig(matrix):
     return turned
 
 
+def _descendant_count(b, seen=None):
+    """Total edit-bone descendants of `b` (edit bones have no built-in
+    `children_recursive`), used to pick the most plausible root when a rig
+    carries more than one parentless bone."""
+    seen = seen if seen is not None else set()
+    total = 0
+    for c in b.children:
+        if c.name in seen:
+            continue
+        seen.add(c.name)
+        total += 1 + _descendant_count(c, seen)
+    return total
+
+
 def main():
     argv = sys.argv[sys.argv.index("--") + 1:]
     in_path, out_fbx = argv[0], argv[1]
@@ -431,32 +494,28 @@ def main():
     # rig. Clearing the flag moves nothing; it only releases the slaving.
     for b in eb:
         b.use_connect = False
-    # Normalize FIRST: a Tripo `spec=mixamo` skeleton spells the same bones
-    # `mixamorig:Spine1` / `mixamorig:Spine2`, which match no RENAME/MERGE key
-    # as shipped. Renaming a bone also renames the matching vertex group
-    # (Blender syncs them), so the weight fold below still finds its groups.
+    # Strip a vendor container prefix (e.g. `mixamorig:`) off each bone's name
+    # if it has one -- prefix only, no alias fold: rigtables.normalize()'s
+    # ALIASES table (`Neck` -> `neck`, `Spine2` -> `Spine02`, ...) exists to
+    # match RENAME/MERGE keys, which this script no longer looks up, and
+    # applying it here would silently rename an own-skeleton rig's own bone.
+    # No RENAME or MERGE runs after this -- the rig keeps every bone it
+    # arrived with, under its own name (prefix aside).
     for b in list(eb):
-        b.name = normalize(b.name)
-    # Resolve the fold table against THIS skeleton's hierarchy before the rename
-    # flattens Spine02 into UpperTorso: on Meshy 7 the bone spelled "neck" is the
-    # chest (the PARENT of Spine02) and folds into UpperTorso, while a Mixamo-
-    # convention neck under the spine top folds into Head. rigtables.merge_plan
-    # carries the rule and the witness.
-    parents = dict((b.name, b.parent.name if b.parent else None) for b in eb)
-    MERGE = merge_plan(parents)
-    print("merge plan (neck ->", dict(MERGE)["neck"], "):", MERGE)
-    for old, new in RENAME.items():
-        if old in eb:
-            eb[old].name = new  # vertex groups auto-rename with the bone
-        else:
-            msg = "WARN: keeper bone %s missing" % old
-            print(msg)
-            warnings.append(msg)
-    # FACING + skeleton fit, measured on the raw vendor rig before anything is
-    # folded away. Both numbers land in rig.report.json (eval rows E10b and the
-    # facing record); the rotation turns the rig -- armature AND mesh together --
-    # so leg C (a Tripo-direct rig, which cannot be yaw-corrected before rigging
-    # because Tripo rigs its own task id) faces -Y like every other character.
+        b.name = strip_vendor_prefix(b.name)
+    # FACING + skeleton fit, measured on the rig before anything else runs.
+    # Both numbers land in rig.report.json (eval rows E10b and the facing
+    # record). This only fires on a rig authored with R15-style shoulder
+    # names (LeftUpperArm/RightUpperArm): with no R15 rename upstream of this,
+    # a character with an own skeleton takes the else branch below and reports
+    # nothing -- posture correction stays R15-only, it is not generalized to
+    # arbitrary bone names. A name-agnostic version of this check is not a
+    # simple extension: with no name to say which side is anatomically
+    # "right," any rule built from joint positions alone can only ever report
+    # whichever side it arbitrarily treats as positive, and would snap to the
+    # same answer regardless of which way the character actually faces. Left
+    # and right are exactly as undetermined from unnamed geometry as front
+    # and back are.
     import mathutils
     span = mesh_span(meshes)
     yaw_matrix = mathutils.Matrix.Identity(4)
@@ -498,41 +557,49 @@ def main():
         print(msg)
         warnings.append(msg)
 
-    for old, _target in MERGE:
-        if old in eb:
-            b = eb[old]
-            for child in list(b.children):
-                child.parent = b.parent
-            eb.remove(b)
-    # Root bone must sit AT the torso, not at the origin: the importer maps it
-    # to HumanoidRootPart and every child bone's rest offset rides on top of
-    # the hovering root — an origin-rooted skeleton floats the visual mesh a
-    # full body-height above the ground (live find, 2026-07-17).
-    root = eb.new("HumanoidRootNode")  # Roblox avatar template root name — "Root" fails the R15 guideline check
-    if "LowerTorso" in eb:
-        lt = eb["LowerTorso"].head.copy()
-        root.head = lt
-        root.tail = (lt.x, lt.y, lt.z + 0.1)
-        eb["LowerTorso"].parent = root
-    else:
-        msg = "WARN: no LowerTorso; root placed at the origin"
+    # No R15 rename or leaf-up fold: the rig keeps every bone it arrived with,
+    # sockets included. What still has to happen is locating THIS rig's own
+    # root -- the bone(s) with no parent -- so the armature origin can be
+    # relocated onto it (below); no bone is inserted to serve as one.
+    roots = [b.name for b in eb if b.parent is None]
+    if not roots:
+        # Not achievable on a well-formed armature (every bone chain ends at
+        # a parentless bone), but a malformed import should report rather
+        # than crash on the .head access below.
+        msg = "WARN: no parentless bone found; the armature origin was not relocated"
         print(msg)
         warnings.append(msg)
-        root.head = (0, 0, 0)
-        root.tail = (0, 0, 0.1)
-    # The importer places HumanoidRootPart at the ARMATURE ORIGIN and hangs
-    # every bone's rest offset off it. With the origin at the feet, the whole
-    # visual skeleton floats a body-height above the hovering root (live
-    # find, import round 3 — needed a hand-calibrated 19-stud bone drop).
-    # Relocate the armature origin to the root bone: shift all bones so the
-    # root head is (0,0,0), then move the object by the same amount so world
-    # positions are unchanged.
-    off = root.head.copy()
-    for b in eb:
-        b.head -= off
-        b.tail -= off
+        root_name = None
+        off = mathutils.Vector((0.0, 0.0, 0.0))
+    else:
+        if len(roots) == 1:
+            root_name = roots[0]
+        else:
+            counts = {n: _descendant_count(eb[n]) for n in roots}
+            root_name = max(roots, key=lambda n: counts[n])
+            msg = ("WARN: %d parentless bones (%s); using %r (the most descendants) as the root -- "
+                   "the others are left in place, unrenamed and unremoved"
+                   % (len(roots), ", ".join(sorted(roots)), root_name))
+            print(msg)
+            warnings.append(msg)
+        # Root bone must sit AT the character, not at the origin: the importer
+        # maps it to HumanoidRootPart and every child bone's rest offset rides
+        # on top of it -- an origin-rooted skeleton floats the visual mesh a
+        # full body-height above the ground (live find, 2026-07-17). The rig's
+        # OWN root bone plays this role now; nothing is inserted to replace it.
+        # The importer places HumanoidRootPart at the ARMATURE ORIGIN and hangs
+        # every bone's rest offset off it, so the origin is relocated onto the
+        # root bone: shift all bones so the root head is (0,0,0), then move the
+        # object by the same amount so world positions are unchanged. A root
+        # already at world origin makes this a no-op, which is what it must
+        # be: nothing here should move a rig that already sits correctly.
+        off = eb[root_name].head.copy()
+        for b in eb:
+            b.head -= off
+            b.tail -= off
     bpy.ops.object.mode_set(mode="OBJECT")
-    arm.location = arm.location + arm.matrix_world.to_3x3() @ off
+    if root_name is not None:
+        arm.location = arm.location + arm.matrix_world.to_3x3() @ off
     # shift the MESH VERTEX DATA by the same offset: Roblox's distance render
     # draws the raw mesh anchored at the root bone node, so feet-origined
     # vertex data floats the far-LOD visual by exactly the hip height (live
@@ -544,39 +611,23 @@ def main():
     # the bones had already turned), so armature and mesh stay in one frame.
     for me in meshes:
         me.data.transform(mathutils.Matrix.Translation(-off) @ yaw_matrix)
-    print("armature origin relocated to root bone (offset", tuple(round(c, 3) for c in off), "); mesh data shifted to match")
-
-    # fold the removed bones' skin weights into their R15 neighbors
-    for me in meshes:
-        vgs = me.vertex_groups
-        for old, target in MERGE:
-            og = vgs.get(old)
-            if og is None:
-                continue
-            tgt = vgs.get(target) or vgs.new(name=target)
-            oi = og.index
-            for v in me.data.vertices:
-                for g in v.groups:
-                    if g.group == oi and g.weight > 0:
-                        tgt.add([v.index], g.weight, "ADD")
-            vgs.remove(og)
+    print("armature origin relocated to the rig's own root bone %r (offset %s); mesh data shifted to match"
+          % (root_name, tuple(round(c, 3) for c in off)))
 
     # Post-rig triangle cap. Every measurement below (bone list aside) is taken
     # after this, so the report describes the exported mesh rather than the one
-    # the vendor handed back.
+    # the source handed back.
     tris_r15, decimated = decimate_to_cap(meshes)
-    print("R15 triangles:", tris_r15, "(decimated)" if decimated else "(under the cap already)")
+    print("triangles:", tris_r15, "(decimated)" if decimated else "(under the cap already)")
     if tris_r15 > TRI_CAP:
         msg = "WARN: %d triangles after the decimate, still over the %d cap" % (tris_r15, TRI_CAP)
         print(msg)
         warnings.append(msg)
 
+    # The full bone list, kept verbatim -- no 16-bone assumption: an own-skeleton
+    # rig may carry any number of bones, sockets included.
     final = [b.name for b in arm.data.bones]
     print("final bones:", sorted(final))
-    if len(final) != 16:
-        msg = "WARN: expected 16 bones (15 R15 + HumanoidRootNode), got %d" % len(final)
-        print(msg)
-        warnings.append(msg)
 
     # Write the report BEFORE the preview render and the export: a render or
     # exporter crash downstream still leaves the evidence of what the skeleton
@@ -585,11 +636,12 @@ def main():
     symmetry_min_frac, symmetry_min_pair = symmetry(weighted_verts)
     report = {
         "bones": sorted(final),
+        "root": root_name,
+        "roots": sorted(roots),
         "root_offset": [float(off.x), float(off.y), float(off.z)],
         "unweighted_frac": unweighted_fraction(meshes, final),
         "tris_r15": tris_r15,
         "tris_decimated": decimated,
-        "neck_fold_target": dict(MERGE)["neck"],
         "shoulder_sep": facing["shoulder_sep"],
         "shoulder_sep_frac": facing["shoulder_sep_frac"],
         "mesh_span": facing["mesh_span"],
@@ -608,6 +660,10 @@ def main():
 
     if stylized:
         swap_basecolor(meshes, stylized)
+    # Downsize AFTER the stylized swap so an oversize stylized texture is
+    # caught too, and BEFORE the export so the shrink actually reaches the
+    # embedded bytes (downsize_textures() packs each scaled image).
+    textures_downsized = downsize_textures()
     preview_render(out_fbx)
 
     bpy.ops.object.select_all(action="SELECT")
@@ -615,7 +671,6 @@ def main():
         filepath=out_fbx,
         use_selection=True,
         add_leaf_bones=False,
-        use_armature_deform_only=True,
         path_mode="COPY",
         embed_textures=True,
         bake_anim=False,
@@ -662,12 +717,9 @@ def main():
     # the machine-readable place to say so. The earlier write still stands as the
     # crash evidence it exists for; this only adds to it.
     report["glb_twin_yaw_deg"] = GLB_TWIN_YAW_DEG if landed else 0
+    report["textures_downsized"] = textures_downsized
     report["warnings"] = warnings
     report_path.write_text(json.dumps(report, indent=2, sort_keys=True))
-    if len(final) != 16:
-        # Non-zero exit is the contract rig.py's r15() checks; the report and
-        # the FBX are both on disk either way so the failure is inspectable.
-        sys.exit(1)
 
 
 if __name__ == "__main__":
