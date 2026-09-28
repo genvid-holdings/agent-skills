@@ -191,7 +191,11 @@ def import_media(project_id, *, path=None, source_url=None, link_type, asset_id,
         # value recorded in the signed provenance attestation.
         parts = ["%s: %s" % (k, json.dumps(v)) for k, v in f.items()]
         if upload_path:
-            parts.insert(0, "rendered_output: @%s" % upload_path)
+            # The one value NOT JSON-quoted: `@<path>` is the CLI's file-upload syntax, and
+            # it reads backslash escapes in the path, so a Windows `...\recolor-purple\...`
+            # arrives as a carriage return. Forward slashes are a valid Windows path and
+            # carry no escapes; as_posix() leaves a POSIX path's separators unchanged.
+            parts.insert(0, "rendered_output: @%s" % Path(upload_path).as_posix())
         # Each send gets its own key: a key names one request body, and the multipart
         # fallback is a different body from the source_url send it follows.
         # 201 schema is a flat body with required media_id* (witnessed via
