@@ -77,7 +77,7 @@ genvid import-generated-media <project-id> -c multipart \
    attested_cost_amount: 0.04, attested_cost_currency: USD'
 ```
 
-The `@` prefix streams the file itself — full resolution, byte-for-byte, signed exactly as written. This is the **only** lossless path for a locally-generated file, and it takes the same provenance fields as the MCP tool (same route, same attestation, same task-claim gate from Step 0). Install once with `brew install genvid-holdings/genvid/genvid` (or the install script; on Windows, the zip from the [releases page](https://github.com/genvid-holdings/genvid-cli/releases)) and log in through your browser on first use.
+The `@` prefix streams the file itself — full resolution, byte-for-byte, signed exactly as written. **On Windows, write the path with forward slashes** (`@C:/renders/image.png`): the CLI reads backslash escapes in an `@` path, so `C:\renders\image.png` would arrive with a carriage return where `\r` was. This is the **only** lossless path for a locally-generated file, and it takes the same provenance fields as the MCP tool (same route, same attestation, same task-claim gate from Step 0). Install once with `brew install genvid-holdings/genvid/genvid` (or the install script; on Windows, the zip from the [releases page](https://github.com/genvid-holdings/genvid-cli/releases)) and log in through your browser on first use.
 
 > **Do not reach for `image_base64` for a real image.** It exists only for a genuinely tiny payload. A full-resolution image encoded into a tool call is impractical and gets **silently truncated** — Genvid then signs a corrupt file that looks successful. If your generator wrote a local file, use the CLI above.
 

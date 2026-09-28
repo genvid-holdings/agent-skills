@@ -98,7 +98,9 @@ path for no reason. For any other provider, bind the downloaded file with the
 CLI multipart path below. When the bytes were changed locally
 (decimation, facing normalization, a format conversion), the artifact is the
 processed file, not the provider's result. Bind that file with
-`genvid import-generated-media <project-id> -c multipart 'rendered_output: @<path>, ...'`.
+`genvid import-generated-media <project-id> -c multipart 'rendered_output: @<path>, ...'`,
+with the path in forward slashes on Windows (the CLI reads backslash escapes in an
+`@` path; the runner's own binds convert it).
 A `source_url` for the processed file works only when that file is hosted on
 the attested provider's vetted result CDN; Genvid refuses any other host.
 Never bind the provider's original result URL in its place: every downstream
