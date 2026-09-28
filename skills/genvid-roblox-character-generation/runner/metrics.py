@@ -21,17 +21,28 @@ def _rot3(entry):
         return None
     return [r[0:3], r[3:6], r[6:9]]
 
-def rest_dump_detail(rest, tol=1e-3):
-    """Which R15 bones the dump_rest output is missing, which of its entries are
-    malformed (an extra bone's included; both are listed as `missing`), and
-    which carry a frame that is not a rotation (`R @ R^T != I` within `tol`, or
-    a mirrored frame, `det <= 0`). Every dumped bone is checked, the R15 ones
-    and any extra bones the rig carries. Diagnostics for the manifest; the
-    booleans the E11 gate reads come from rest_dump_checks."""
+def rest_dump_detail(rest, rig_bones=None, tol=1e-3):
+    """Which of the rig's own bones the dump_rest output is missing, which of
+    its entries are malformed (an extra bone's included; both are listed as
+    `missing`), and which carry a frame that is not a rotation (`R @ R^T != I`
+    within `tol`, or a mirrored frame, `det <= 0`).
+
+    `rig_bones`, when given, is the rig's own bone list (e.g.
+    `stages.rig.report.bones`, a record of every bone the prepped rig
+    carries) -- completeness is checked against THAT, whatever names the rig
+    uses (a rig kept on its own skeleton has no fixed 15-bone target). Without
+    it (an older manifest with no rig report, or an adopted rig with no rig
+    stage) completeness falls back to the fixed R15 set, exactly as before.
+
+    Every dumped bone is checked for orthonormality regardless: the R15 ones
+    or the rig's own, plus any extra bones (wings, a jaw, cloth) either way.
+    Diagnostics for the manifest; the booleans the E11 gate reads come from
+    rest_dump_checks."""
     rest = rest if isinstance(rest, dict) else {}
+    expected = list(rig_bones) if rig_bones is not None else list(rigtables.R15_BONES)
     missing, non_orthonormal, worst = [], [], 0.0
-    extras = sorted(b for b in rest if b not in rigtables.R15_BONES)
-    for bone in list(rigtables.R15_BONES) + extras:
+    extras = sorted(b for b in rest if b not in expected)
+    for bone in list(expected) + extras:
         r = _rot3(rest.get(bone))
         if r is None:
             missing.append(bone)
@@ -50,7 +61,7 @@ def rest_dump_detail(rest, tol=1e-3):
     return {"missing": missing, "non_orthonormal": non_orthonormal,
             "max_orthonormality_error": worst}
 
-def rest_dump_checks(rest, tol=1e-3):
+def rest_dump_checks(rest, rig_bones=None, tol=1e-3):
     """E11's two named conditions ("dump complete/orthonormal"), COMPUTED.
 
     Booleans only, deliberately: eval_cmd's E11 predicate is
@@ -58,7 +69,7 @@ def rest_dump_checks(rest, tol=1e-3):
     error carried in here would read as a FAILING check on a good dump, and a
     list of bone names would read as a passing one on any dump at all. The
     diagnostics live in rest_dump_detail and stay out of the gate's reach."""
-    d = rest_dump_detail(rest, tol)
+    d = rest_dump_detail(rest, rig_bones=rig_bones, tol=tol)
     return {"complete": not d["missing"], "orthonormal": not d["non_orthonormal"]}
 
 def _world_y(rest, bone):
@@ -88,44 +99,10 @@ def _world_y(rest, bone):
         r_acc = [[sum(r_acc[i][k] * r[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
     return t_acc[1]
 
-def shoulder_ratio(rest, feet_y):
-    sh = (_world_y(rest, "LeftUpperArm") + _world_y(rest, "RightUpperArm")) / 2.0
-    head = _world_y(rest, "Head")
-    return (sh - feet_y) / (head - feet_y)
-
-def _quat_to_axis_angle(q):
-    x, y, z, w = q
-    w = max(-1.0, min(1.0, w))
-    ang = 2.0 * math.acos(w)
-    s = math.sqrt(max(1e-12, 1.0 - w * w))
-    return (x / s, y / s, z / s), ang
-
-def _yaw_deg(q):
-    # rotation about +Y extracted from the quaternion's Y component projection
-    (ax, ay, az), ang = _quat_to_axis_angle(q)
-    return math.degrees(ang * ay)
-
-def hip_twist_deg(frames):
-    return max(abs(_yaw_deg(f["p"]["LowerTorso"])) for f in frames if "LowerTorso" in f["p"])
-
-def knee_twist_frac(frames, bones=("LeftLowerLeg", "RightLowerLeg")):
-    twist, total = 0.0, 0.0
-    for f in frames:
-        for b in bones:
-            if b not in f["p"]:
-                continue
-            (ax, ay, az), ang = _quat_to_axis_angle(f["p"][b])
-            twist += abs(ang * ay)      # about the bone's own Y axis
-            total += abs(ang)
-    return twist / total if total > 1e-9 else 0.0
-
-def foot_lift(traj, bones=("LeftFoot", "RightFoot")):
-    best = 0.0
-    for b in bones:
-        ys = [p[2] for p in traj.get(b, [])]
-        if ys:
-            best = max(best, max(ys) - min(ys))
-    return best
+# shoulder_ratio, hip_twist_deg, knee_twist_frac and foot_lift (E10, E17, E18,
+# E16) are RETIRED: each measured a fixed human proportion or R15 bone name a
+# rig kept on its own skeleton is not guaranteed to have, with no
+# name-agnostic replacement.
 
 def cycle_seconds(times):
     return float(times[-1] - times[0]) if len(times) > 1 else 0.0

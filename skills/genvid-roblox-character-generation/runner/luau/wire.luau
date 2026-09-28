@@ -28,9 +28,49 @@ for _, n in { "BodyDepthScale", "BodyHeightScale", "BodyWidthScale", "HeadScale"
 end
 for _, b in pairs(bones) do b:SetAttribute("OriginalPosition", b.Position) end
 hum:SetAttribute("AvatarPartScaleType", "Classic")
--- 2. rebuild HumanoidRootPart as a torso box at the LowerTorso bone
+-- 2. rebuild HumanoidRootPart as a torso box at the rig's hip/root reference
+-- point: LowerTorso when the rig has one (an R15-shaped rig -- today's exact
+-- placement, unchanged), else the mesh's own geometric centre -- the same
+-- rule groundfit.luau measured HipHeight against, and it has to stay the same
+-- rule: a different reference point here than the one HipHeight was measured
+-- against floats or sinks the rig by the difference. No step requires
+-- LowerTorso.
+--
+-- Height and centre come from the WORLD-AXIS extent of the mesh's own part
+-- corners, never Model:GetBoundingBox(): that box is reported in the PIVOT
+-- frame, and the importer leaves a freshly imported skinned Model's pivot
+-- rotated 90 degrees about X, so its Y is the character's depth (witnessed
+-- 2026-09-04 on all three bake-off imports, scale.luau/zoo_capture.luau's own
+-- note). Restricted to MeshParts, not every BasePart: the 3D Importer's
+-- bone-holder part (the root bone's parent) is not the body and would skew
+-- the centre if it sat away from it.
+local CORNERS = { -0.5, 0.5 }
+local function meshBoxCenter(m)
+	local lo = Vector3.new(math.huge, math.huge, math.huge)
+	local hi = Vector3.new(-math.huge, -math.huge, -math.huge)
+	for _, d in m:GetDescendants() do
+		if d:IsA("MeshPart") then
+			local cf, s = d.CFrame, d.Size
+			for _, fx in CORNERS do
+				for _, fy in CORNERS do
+					for _, fz in CORNERS do
+						local p = cf:PointToWorldSpace(Vector3.new(s.X * fx, s.Y * fy, s.Z * fz))
+						lo = Vector3.new(math.min(lo.X, p.X), math.min(lo.Y, p.Y), math.min(lo.Z, p.Z))
+						hi = Vector3.new(math.max(hi.X, p.X), math.max(hi.Y, p.Y), math.max(hi.Z, p.Z))
+					end
+				end
+			end
+		end
+	end
+	return (lo + hi) / 2
+end
 local old = model:FindFirstChild("HumanoidRootPart"); if old then old:Destroy() end
-local lt = bones.LowerTorso.WorldPosition
+local lt
+if bones.LowerTorso then
+	lt = bones.LowerTorso.WorldPosition
+else
+	lt = meshBoxCenter(model)
+end
 -- Same rule as groundfit.luau, and it has to stay the same rule: HipHeight was
 -- measured against a box of THIS size, so a torso box built from spine spacing
 -- (2 * (UpperTorso.Y - LowerTorso.Y)) here would float or sink the rig by half

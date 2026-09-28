@@ -88,6 +88,7 @@ import re
 from pathlib import Path
 import eval_cmd
 import groundfit
+import kfs
 import manifest
 import metrics
 
@@ -116,7 +117,7 @@ STAGE_OF = {"inspect_template": "rest", "scale": "rest", "dump_rest": "rest", "g
             # surface pass's other artifacts -- rig.py's surface_* keys -- already live)
             # rather than opening a new stage.
             "applymesh": "rig",
-            # adopt_inspect fills the wire stage of an ADOPTED manifest (adopt.py)
+            # adopt_inspect fills the wire stage of an ADOPTED manifest (kind="adopted")
             # from the parked template itself; no scale/wire steps ever ran on that chain.
             "adopt_inspect": "wire",
             # bench_clip plays a PUBLISHED clip on a Play clone and reports hip drop / slide / head-over-sole; the
@@ -150,7 +151,27 @@ RENDER_DEFAULTS = {"SPEED": 1, "SETTLED_BOTTOM": "", "MAX_WAIT": 25, "BENCH_X": 
                     # creator. The echo is what ingest() records the creator from -- never
                     # the manifest's current creator_group_id, which a later publish on a
                     # different clip can have already overwritten by ingest time.
-                    "CREATOR_FIELDS": "", "CREATOR_ID_EXPR": "nil", "CREATOR_TYPE_EXPR": '"User"'}
+                    "CREATOR_FIELDS": "", "CREATOR_ID_EXPR": "nil", "CREATOR_TYPE_EXPR": '"User"',
+                    # The bones treadmill.luau and bench_clip.luau track, defaulted to the
+                    # classic R15 names: unchanged behavior for a rig kept on them (an
+                    # R15-named rig, or a vendor rig whose own names happen to match, e.g.
+                    # a real vendor rig whose feet are already spelled LeftFoot/RightFoot).
+                    # emit() overrides HIPS_BONE from the rig's own root bone
+                    # (stages.rig.report.root) when the manifest has one; a rig without
+                    # a bone by any of these names still renders (both templates nil-guard
+                    # a bone they cannot find), and the bench/treadmill report which ones,
+                    # by name, rather than erroring.
+                    "FOOT_BONE": eval_cmd.E19_FOOT_BONE, "HIPS_BONE": "LowerTorso", "HEAD_BONE": "Head",
+                    "LFOOT_BONE": "LeftFoot", "RFOOT_BONE": "RightFoot",
+                    # build_kfs's own root-node search name: kfs.write's root_node
+                    # names the rig's own root bone directly, so the
+                    # sequence's root Pose (and the template's own bone) can be
+                    # anything -- "GroundRoot", "Hips" -- not only the classic
+                    # default. emit() overrides it from stages.rig.report.root, the
+                    # same value clips.build() fed kfs.write; unchanged default for
+                    # an adopted manifest (no rig report), which keeps kfs.write's
+                    # own ROOT_NODE default.
+                    "ROOT_BONE": "HumanoidRootNode"}
 
 # Ingest handlers contributed by `register_steps`, consulted before any of
 # ingest()'s own step branches.
@@ -235,12 +256,75 @@ def template_path(step):
     raise FileNotFoundError("no Luau template %s in %s" % (name, [str(d) for d in TEMPLATE_DIRS]))
 
 
+_LONG_OPEN = re.compile(r"\[(=*)\[")
+
+
+def _in_line_comment(src, at):
+    """Whether offset `at` of Luau source `src` sits in a `--` line comment.
+    Scans from the top so a string or long bracket opened on an earlier line
+    is honoured: short strings (' " and `, with backslash escapes), long
+    strings `[[ ]]` / `[==[ ]==]`, and block comments `--[[ ]]`, whose text
+    a newline cannot end."""
+    i = 0
+    while i < at:
+        c = src[i]
+        string = _LONG_OPEN.match(src, i) if c == "[" else None
+        if c in "\"'`":
+            i += 1
+            while i < at and src[i] != c and src[i] != "\n":
+                i += 2 if src[i] == "\\" else 1
+            i += 1
+        elif src.startswith("--", i):
+            long = _LONG_OPEN.match(src, i + 2)
+            if not long:
+                eol = src.find("\n", i)
+                if eol == -1 or eol >= at:
+                    return True
+                i = eol + 1
+                continue
+            close = src.find("]%s]" % long.group(1), long.end())
+            if close == -1 or close >= at:
+                return False
+            i = close + len(long.group(1)) + 2
+        elif string is not None:
+            close = src.find("]%s]" % string.group(1), string.end())
+            if close == -1 or close >= at:
+                return False
+            i = close + len(string.group(1)) + 2
+        else:
+            i += 1
+    return False
+
+
+def _refuse_multiline_in_comment(path, src, params):
+    """A multi-line value substituted into a `--` comment ends that comment at
+    its first newline, and the rest of it renders as bare code: Studio then
+    refuses the whole chunk ("Failed to parse command code"), naming nothing.
+    publish_clip's CREATOR_FIELDS did exactly that under --group. A single-line
+    value in a comment is documentation and renders; many templates, the pack's
+    and a title's registered ones, name their parameters that way."""
+    for k, v in params.items():
+        if "\n" not in str(v):
+            continue
+        token = "{{%s}}" % k
+        at = src.find(token)
+        while at != -1:
+            if _in_line_comment(src, at):
+                raise ValueError("%s:%d: %s is multi-line and sits in a `--` comment, which would end "
+                                 "at its first newline and leave the rest as code; take the "
+                                 "placeholder out of the comment"
+                                 % (path.name, src.count("\n", 0, at) + 1, token))
+            at = src.find(token, at + len(token))
+
+
 def render(step, **params):
-    src = template_path(step).read_text()
+    path = template_path(step)
+    src = path.read_text()
     for k, v in RENDER_DEFAULTS.items():
         params.setdefault(k, v)
     if "{{PARK_PATH}}" in src and "PARK_PATH" not in params:
         params["PARK_PATH"] = _luau_list(park_path_segments(params["PARK_FOLDER"]))
+    _refuse_multiline_in_comment(path, src, params)
     for k, v in params.items():
         src = src.replace("{{%s}}" % k, str(v))
     return src
@@ -394,6 +478,14 @@ def emit(m, step, **params):
     params.setdefault("HEIGHT", m["height_studs"]); params.setdefault("SCALE", 1)
     params.setdefault("MODEL_PATH", "workspace:FindFirstChild(%r, true)" % template)
     params.setdefault("WALK_ID", ""); params.setdefault("CAMERA", "close"); params.setdefault("LOD", "close")
+    if step in ("treadmill", "treadmill_scaled", "bench_clip"):
+        # The rig's own root/hip bone (stages.rig.report.root) overrides the
+        # R15 default, unless the caller already named one explicitly (--param
+        # HIPS_BONE=...). No rig report (an adopted manifest) keeps the
+        # RENDER_DEFAULTS literal, "LowerTorso" -- exactly today's behavior.
+        rig_root = ((m["stages"].get("rig") or {}).get("report") or {}).get("root")
+        if rig_root:
+            params.setdefault("HIPS_BONE", rig_root)
     if step == "treadmill_scaled":
         # The post-scale measurement plays the walk at animSpeedScale, which
         # clips.speed_scale() must have recorded first; refusing here keeps a
@@ -402,6 +494,13 @@ def emit(m, step, **params):
         if not scale:
             raise RuntimeError("treadmill_scaled needs stages.clips.animSpeedScale; run clips speed-scale first")
         params["SPEED"] = float(scale)
+    if step == "build_kfs":
+        # kfs.write's root Pose is named from the same rig report (clips.py's
+        # root_node); reading the template/sequence back under any other name
+        # would refuse a correctly-built own-skeleton clip.
+        rig_root = ((m["stages"].get("rig") or {}).get("report") or {}).get("root")
+        if rig_root:
+            params.setdefault("ROOT_BONE", rig_root)
     if step == "sethip":
         # Refusing beats defaulting: writing an uncorrected hip through the step
         # whose whole job is the correction would look exactly like a converged
@@ -489,9 +588,12 @@ def check_kfs(clip, item, data):
         problems.append("Priority %r, expected %r" % (data.get("priority"), exp["priority"]))
     if exp["keyframes"] and data.get("rootPose") != "HumanoidRootPart":
         problems.append("root pose %r, expected 'HumanoidRootPart'" % data.get("rootPose"))
+    # exp["root_node"] is the rig's own root bone name, or the older bool for
+    # the synthesized HumanoidRootNode (kfs.write's True).
+    root_bone = exp["root_node"] if isinstance(exp["root_node"], str) else kfs.ROOT_NODE
     if bool(data.get("rootNode")) != bool(exp["root_node"]):
-        problems.append("HumanoidRootNode pose %s, expected %s" % (
-            "present" if data.get("rootNode") else "absent", "present" if exp["root_node"] else "absent"))
+        problems.append("%s pose %s, expected %s" % (
+            root_bone, "present" if data.get("rootNode") else "absent", "present" if exp["root_node"] else "absent"))
     if problems:
         raise KfsMismatch("build_kfs: ServerStorage.Assets.Anims.%s is not the sequence `clips build` recorded "
                           "(%s). Run %s" % (data.get("name"), "; ".join(problems), rebuild))
@@ -501,9 +603,9 @@ def check_kfs(clip, item, data):
                           "checks cannot run; park it (or fix studio.park_folder) and re-run build_kfs")
     if bool(data.get("templateHasNode")) != bool(exp["root_node"]):
         raise KfsMismatch(
-            "build_kfs: the template %s a HumanoidRootNode bone but the sequence was built %s the node pose, so "
+            "build_kfs: the template %s a %s bone but the sequence was built %s that pose, so "
             "the Animator would drop its root translation. Record the rig's shape (adopt_inspect for an adopted "
-            "rig) and run %s" % ("has" if data.get("templateHasNode") else "has no",
+            "rig) and run %s" % ("has" if data.get("templateHasNode") else "has no", root_bone,
                                  "without" if exp["root_node"] else "with", rebuild))
     scale, built = float(data.get("templateScale") or 0), float(exp["root_scale"])
     if exp.get("root_motion") and abs(scale - built) > KFS_SCALE_TOL * max(1.0, abs(built)):
@@ -602,7 +704,7 @@ def ingest(m, step, result_path, lod=None, clip=None):
                       "(eval rows E30-E32 list it)" % (clip, verdict["unusable"]))
         return data
     if step == "dump_rest":
-        assert "LowerTorso" in data, "rest dump lacks LowerTorso"
+        assert isinstance(data, dict) and data, "rest dump is empty: %r" % (data,)
         (Path(m["out_dir"]) / "rest.json").write_text(json.dumps(data, indent=1))
         # E11 ("rest dump complete/orthonormal") is a GATE, and eval_cmd evaluates
         # stages.rest.result with _all_true -- true for any non-empty list. Storing
@@ -612,8 +714,16 @@ def ingest(m, step, result_path, lod=None, clip=None):
         # diagnostics ride on their own stage keys, out of the gate's reach.
         # Malformed entries are recorded (as incomplete), never raised on: ingest
         # is the recording surface, `runner eval` is the reporting one.
-        manifest.set_stage(m, "rest", result=metrics.rest_dump_checks(data),
-                           bones=sorted(data.keys()), rest_detail=metrics.rest_dump_detail(data),
+        #
+        # Completeness is checked against the rig's OWN bone list
+        # (stages.rig.report.bones), root dropped the same way E7/E11
+        # already drop it (eval_cmd._report_bones_excluding_root) -- no fixed
+        # 15-bone target for a rig kept on its own skeleton. A manifest with no
+        # rig report (an adopted rig, or one prepped before the rig report
+        # recorded `root`) falls back to the R15 set, exactly as before this change.
+        rig_bones = eval_cmd._report_bones_excluding_root(m, data)
+        manifest.set_stage(m, "rest", result=metrics.rest_dump_checks(data, rig_bones=rig_bones),
+                           bones=sorted(data.keys()), rest_detail=metrics.rest_dump_detail(data, rig_bones=rig_bones),
                            artifact=str(Path(m["out_dir"]) / "rest.json"))
     elif step == "groundfit":
         assert data.get("hipHeight", 0) > 0, "hipHeight must be positive: %r" % data

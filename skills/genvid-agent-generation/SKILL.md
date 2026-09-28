@@ -244,8 +244,9 @@ and its kind has to agree with the slot: a `.glb` filed under `..._image` is
 rejected.
 
 Add `target` and `stage` when the mesh is destined for a platform pipeline —
-`target: roblox, stage: roblox/r15-rigged` — which is what makes it
-conformance-checkable later.
+`target: roblox, stage: roblox/rigged` for a rig kept on its own skeleton, or
+`target: roblox, stage: roblox/r15-rigged` for a rig on the real R15 skeleton —
+which is what makes it conformance-checkable later.
 
 **The one case that does NOT belong here.** A mesh generated *inside* a
 platform that keeps the bytes — a Roblox `generate_mesh` /

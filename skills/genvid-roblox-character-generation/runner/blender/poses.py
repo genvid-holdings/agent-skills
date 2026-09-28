@@ -81,13 +81,17 @@ far it moves.
 `runner/luau/dump_rest.luau` (per bone: parent, rot 3x3 row-major from
 CFrame:GetComponents, pos), ingested by `studio.py` to `<out>/rest.json`. The rig
 is scaled to its final height BEFORE that dump, so every number here is at final
-scale. It carries every bone of the rig but the root node: the fifteen R15 bones
-and any extra ones (wings, a jaw, cloth). The clip must drive every R15 bone; an
-extra bone it does not key is held at its rest, left out of the frames, and
-listed under `held` in the output.
-`--rename` applies the Meshy->R15 bone rename/merge first (raw vendor clips need
-it; clips authored on an already-R15-named skeleton, e.g. Mixamo retargets of our
-exported rig, do not). `--donor` is an ALIAS for `--rename`: a Meshy-library clip
+scale. It carries every bone of the rig but the root node, however the rig names
+them -- a rig kept on its own skeleton has no fixed 15-bone target. A bone the clip does not
+key is held at its rest, left out of the frames, and listed under `held` in the
+output -- true of any bone, not only an "extra" one.
+`--rename` matches a rest bone shaped like an R15 name (LowerTorso, LeftUpperLeg,
+...) onto the clip's own Meshy/Mixamo vendor spelling for it
+(rigtables.RENAME_TARGET_MAP, matched by normalized name), for a raw vendor clip;
+clips authored on an already-R15-named skeleton, e.g. Mixamo retargets of our
+exported rig, do not need it. Neither the clip's nor the rig's bones are ever
+renamed -- the match runs through the table instead, the same way `--mixamo`/
+`--ual` already did. `--donor` is an ALIAS for `--rename`: a Meshy-library clip
 played on the Meshy-rigged donor of the same mesh arrives on a skeleton that still
 carries the vendor's bone names, so it takes exactly the same path.
 `--mixamo` reads a native Mixamo skeleton (mixamorig:/mixamorig1: prefix,
@@ -124,15 +128,18 @@ non-root bone the same way, so the rig file must parent each of them where
 the clip does, or the transfer is refused naming both parents.
 
 Ported from the retired pipeline's stage_h_poses.py. Changes from that source:
-the RENAME/MERGE/MIXAMO_MAP/UAL_MAP tables come from the runner's `rigtables`
-module (single source shared with the rig conversion); `--rename` normalizes
-vendor bone spellings before the rename/merge, as rig_r15.py does; the `.luau`
-writer is dropped (kfs.py builds the KeyframeSequence from the JSON); the JSON
-carries the world-space `traj` block that impact.py and metrics.py score, plus
-`clip_seconds` and `source`; and the clip-to-rig scale `k` (root motion and
-the g-scoring ratio) is the leg-chain ratio between the rig's rest and the
-clip's bind, recorded as `k` in the doc. `--rig-height` is still accepted
-(clips.py passes the manifest's `height_studs`) and only reported.
+`--rename`/`--mixamo`/`--ual` all resolve through one table-driven matcher,
+`rigtables.clip_bone_map` (single source shared with the rig conversion,
+a rig kept on its own skeleton may not have R15 names to rename onto, so no bone in either the clip or the rig is ever renamed any
+more -- the RENAME table's own keys, inverted, are just one more clip-mode
+table alongside MIXAMO_MAP/UAL_MAP); the `.luau` writer is dropped (kfs.py
+builds the KeyframeSequence from the JSON); the JSON carries the world-space
+`traj` block that impact.py and metrics.py score, plus `clip_seconds` and
+`source`; and the clip-to-rig scale `k` (root motion and the g-scoring ratio)
+is the leg-chain ratio between the rig's rest and the clip's bind -- or, for
+a rig/clip with no R15 or Meshy/Mixamo leg names at all, the root-to-Head
+span -- recorded as `k` and `k_source` in the doc. `--rig-height` is still
+accepted (clips.py passes the manifest's `height_studs`) and only reported.
 """
 import bpy
 import json
@@ -142,7 +149,7 @@ import sys
 
 # rigtables lives in the runner package dir, one level up from blender/.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from rigtables import RENAME, MERGE, clip_bone_map, normalize  # noqa: E402
+from rigtables import clip_bone_map, normalize  # noqa: E402
 
 import numpy as np
 
@@ -319,42 +326,79 @@ def listed(offsets):
     return ", ".join(f"{n} {d:0.1f} deg" for n, d in offsets.items())
 
 
+# The R15 leg-name convention, and the Mixamo/Meshy vendor convention
+# (rigtables.RENAME's own keys) that a rig kept on its own vendor names uses
+# instead: both give the exact same physical measurement (hip -> knee ->
+# ankle, both sides), just under different bone names, so trying each in turn
+# keeps leg_length()'s value bit-for-bit unchanged for either kind of rig.
+_LEG_JOINT_NAMES = (
+    (("LeftUpperLeg", "LeftLowerLeg", "LeftFoot"), ("RightUpperLeg", "RightLowerLeg", "RightFoot")),
+    (("LeftUpLeg", "LeftLeg", "LeftFoot"), ("RightUpLeg", "RightLeg", "RightFoot")),
+)
+
+
 def leg_length(heads):
-    """Hip joint -> knee -> ankle on both sides, from bone origins."""
-    return sum(float(np.linalg.norm(np.asarray(heads[side + b]) - np.asarray(heads[side + a])))
-               for side in ("Left", "Right") for a, b in (("UpperLeg", "LowerLeg"), ("LowerLeg", "Foot")))
+    """Hip joint -> knee -> ankle on both sides, from bone origins in
+    `heads`' own space: the R15 names when present, else the Mixamo/Meshy
+    vendor convention's own leg names. None when `heads` has neither (a rig
+    or clip with no such leg-name convention at all, e.g. a spider's own
+    per-leg segments) -- see root_head_span for the fallback that covers it."""
+    for left, right in _LEG_JOINT_NAMES:
+        try:
+            return sum(float(np.linalg.norm(np.asarray(heads[j[i + 1]]) - np.asarray(heads[j[i]])))
+                       for j in (left, right) for i in (0, 1))
+        except KeyError:
+            continue
+    return None
 
 
-def rename_to_r15(arm):
-    """The Meshy->R15 bone rename/merge (`--rename`), on `arm` in place."""
-    bpy.context.view_layer.objects.active = arm
-    bpy.ops.object.mode_set(mode="EDIT")
-    eb = arm.data.edit_bones
-    # Normalize FIRST, as rig_r15.py does: a Tripo `spec=mixamo` skeleton
-    # spells the same bones `mixamorig:Spine1` / `mixamorig:Spine2`, which
-    # match no RENAME/MERGE key as shipped.
-    for b in list(eb):
-        b.name = normalize(b.name)
-    for old, new in RENAME.items():
-        if old in eb:
-            eb[old].name = new
-    for old, _t in MERGE:
-        if old in eb:
-            b = eb[old]
-            for child in list(b.children):
-                child.parent = b.parent
-            eb.remove(b)
-    bpy.ops.object.mode_set(mode="OBJECT")
+def root_head_span(heads, rb):
+    """Root bone -> Head, in `heads`' own space: the one length available on
+    ANY rig this pipeline accepts (Head is required at ingest; every rig has
+    a root), used to scale root motion and the axis-map truth when the R15/vendor leg
+    chain (leg_length, above) is not there to measure instead -- a rig with
+    no humanoid leg-name convention at all. None when `heads` lacks the root
+    or Head."""
+    roots = sorted(n for n in rb if rb[n]["parent"] == "HumanoidRootPart")
+    root = next((n for n in roots if n in heads), None)
+    if root is None or "Head" not in heads:
+        return None
+    return float(np.linalg.norm(np.asarray(heads["Head"]) - np.asarray(heads[root])))
 
 
-def bind_armature(path, names, rename=False):
+def paired_scale(a_heads, b_heads, rb):
+    """(length_a, length_b, kind) for two head-position sets in `heads`' own
+    space: the leg chain when BOTH have the R15/vendor leg-name convention at
+    all (leg_length returns a number, not None -- whatever that number is,
+    zero included), else each side's own root-to-Head span (root_head_span)
+    -- the one length any rig this pipeline accepts, and any clip transferred
+    onto one, carries, whatever its own bone-naming convention.
+
+    The fallback triggers on ABSENT leg names, never on a present-but-zero
+    leg chain: a rig that HAS the leg bones but whose rest data makes them
+    coincide is a malformed rest, not a rig with no leg-name convention, and
+    must still refuse (the caller's own `<= 1e-9` check, after this call) --
+    silently substituting root-to-Head there would hide the malformed rest
+    instead of catching it. Either length is 0.0 when even the root-to-Head
+    fallback has nothing to measure (`kind` is still "root_to_head" then; the
+    caller's same check reads the zero)."""
+    la, lb = leg_length(a_heads), leg_length(b_heads)
+    if la is not None and lb is not None:
+        return la, lb, "leg_chain"
+    return root_head_span(a_heads, rb) or 0.0, root_head_span(b_heads, rb) or 0.0, "root_to_head"
+
+
+def bind_armature(path, names, mode="names", prefix=""):
     """The bind of the armature in `path` (a rig fbx or glb): per bone in
-    `names` its world bind rotation and origin, read in the same Blender world
-    the clip was imported into, and per bone with a parent its rest offset in
-    that parent's frame, in world units, with the parent's name. `rename` puts
-    its bones through the same rename/merge the clip took. The import cannot
-    move the clip's timing: the scene's frame rate and range are put back as
-    they were."""
+    `names` (rest.json bone names) its world bind rotation and origin, read
+    in the same Blender world the clip was imported into, and per bone with a
+    parent its rest offset in that parent's frame, in world units, with the
+    parent's name. `mode`/`prefix` resolve `names` against this armature's own
+    bone names exactly as `rigtables.clip_bone_map` resolves them against a
+    clip's (this file is read for the same reason: a vendor-named skeleton
+    the clip was authored on, matched onto `names` without renaming a single
+    bone in either file). The import cannot move the clip's timing: the
+    scene's frame rate and range are put back as they were."""
     sc = bpy.context.scene
     kept = (sc.render.fps, sc.render.fps_base, sc.frame_start, sc.frame_end, sc.frame_current)
     before = set(bpy.data.objects)
@@ -367,18 +411,26 @@ def bind_armature(path, names, rename=False):
     rig = next((o for o in bpy.data.objects if o not in before and o.type == "ARMATURE"), None)
     if rig is None:
         raise ValueError(f"--bind-from={path}: no armature in it")
-    if rename:
-        rename_to_r15(rig)
-    missing = [n for n in names if n not in rig.data.bones]
-    if missing:
-        raise ValueError(f"--bind-from={path}: armature lacks bones {missing}")
+    src, held = clip_bone_map(names, [b.name for b in rig.data.bones], mode=mode, prefix=prefix)
+    if held:
+        raise ValueError(f"--bind-from={path}: armature lacks bones {held}")
     _u, _s, _vt = np.linalg.svd(np.array(mat9(rig.matrix_world))[:3, :3])
     AW = _u @ _vt
-    Bw = {n: AW @ np.array(mat9(rig.data.bones[n].matrix_local))[:3, :3] for n in names}
-    heads = {n: np.array((rig.matrix_world @ rig.data.bones[n].matrix_local).translation) for n in names}
+    Bw = {n: AW @ np.array(mat9(rig.data.bones[src[n]].matrix_local))[:3, :3] for n in names}
+    heads = {n: np.array((rig.matrix_world @ rig.data.bones[src[n]].matrix_local).translation) for n in names}
     scale = float(np.mean(_s))
-    offsets = {n: (b.parent.name, (b.parent.matrix_local.inverted() @ b.matrix_local).translation * scale)
-               for n in names for b in (rig.data.bones[n],) if b.parent is not None}
+    # A parent bone's raw name is translated back to its `names` (rest-bone)
+    # identity when it is itself one of the matched bones -- the same
+    # translation `main()` applies to the clip's raw parent name (`clip_names`)
+    # before the two are compared. Without it a vendor-named file's raw parent
+    # ("Hips") would never equal the clip's translated one ("LowerTorso") even
+    # though they are the same bone: neither file's bones are renamed any more
+    # (a rig kept on its own skeleton may not have R15 names either), so this
+    # stands in for what the old rename used to make true by construction.
+    rig_names = {c: n for n, c in src.items()}
+    offsets = {n: (rig_names.get(b.parent.name, b.parent.name),
+                   (b.parent.matrix_local.inverted() @ b.matrix_local).translation * scale)
+               for n in names for b in (rig.data.bones[src[n]],) if b.parent is not None}
     return Bw, heads, offsets
 
 
@@ -485,9 +537,6 @@ def main():
         bpy.ops.import_scene.fbx(filepath=clip_path)
     arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
 
-    if do_rename:
-        rename_to_r15(arm)
-
     if action_name is not None:
         act = bpy.data.actions[action_name]
         if arm.animation_data is None:
@@ -509,15 +558,28 @@ def main():
     elif do_ual:
         mode = "ual"
         print("ual mode (Rigify DEF- skeleton)")
-    # The rest dump carries every bone of the rig, the fifteen R15 ones and any
-    # extra bones (wings, a jaw, cloth). A clip must drive every R15 bone; an
-    # extra bone it does not key is HELD: posed at its rest, following its
-    # parent, and left out of the frames (kfs.write leaves it out of the
-    # sequence unless it must stay as a structural node, so lower-priority
-    # tracks keep its joint), so a clip library authored without those bones
-    # still plays.
+    elif do_rename:
+        # The retired Meshy->R15 rename/merge (`rename_to_r15`), now a table
+        # lookup instead of a Blender rename: neither the clip's nor the
+        # rig's bones are touched -- a rig kept on its own skeleton may not
+        # have R15 names to rename TO. `rename` mode maps a
+        # rest bone shaped like an R15 name onto the clip's own Meshy/Mixamo
+        # vendor spelling for it (rigtables.RENAME_TARGET_MAP), matched by
+        # normalized name so a vendor container prefix still resolves.
+        mode = "rename"
+        print("rename mode (Meshy/Mixamo vendor convention, matched by table)")
+    # The rest dump carries every bone of the rig, however it names them (no
+    # fixed 15-bone target any more). A clip that does not
+    # drive one is HELD: posed at its rest, following its parent, and left
+    # out of the frames (kfs.write leaves it out of the sequence unless it
+    # must stay as a structural node, so lower-priority tracks keep its
+    # joint), so a clip library authored without those bones still plays.
     src, held = clip_bone_map(list(rb.keys()), [b.name for b in arm.data.bones], mode=mode, prefix=prefix)
     names = list(src)
+    if not names:
+        raise ValueError(f"the clip drives none of the rig's bones (rig: {sorted(rb.keys())}, clip: "
+                         f"{sorted(b.name for b in arm.data.bones)}); check --rename/--mixamo/--ual/--donor "
+                         "names the clip's actual skeleton convention")
     if held:
         print(f"held at rest (the clip does not key them): {held}")
     translate = next((a.split("=", 1)[1] for a in argv if a.startswith("--translate=")), "")
@@ -538,6 +600,23 @@ def main():
     if unreached:
         # the transfer walks the chain from the root part: these get no track at all
         print(f"warning: rest.json bones not reached from HumanoidRootPart get no track: {', '.join(unreached)}")
+
+    # The rig's own root-level bone (LowerTorso for an R15-named rig, Hips for
+    # a vendor one kept on its own names, GroundRoot for a spider, ...): the
+    # one bone every rest.json has exactly one kind of (parent ==
+    # HumanoidRootPart), used below wherever the old code assumed "LowerTorso"
+    # by name. `names` may not include it (a clip that does not key it), so
+    # this is read straight from `rb`, not `src`.
+    root_name = next((n for n in sorted(rb) if rb[n]["parent"] == "HumanoidRootPart"), None)
+    if root_name is None:
+        raise ValueError("rest.json has no root-level bone (none has parent HumanoidRootPart); malformed rest dump")
+    if root_name not in names:
+        # The root-hips reference is read unconditionally below (root motion
+        # or not: --no-root still measures it, unused) -- a clip that holds
+        # the root bone at rest (does not key it at all) has no reference to
+        # read, R15-named rig or not.
+        raise ValueError(f"the clip does not drive {root_name!r} (the rig's own root bone); every clip must key "
+                         "the root, whatever it is named, even for a rotation-only (--no-root) transfer")
 
     # Roblox world rests (HRP frame)
     Rw = rest_rotations(rb, order)
@@ -573,7 +652,7 @@ def main():
     hips_offset = None
     bind_frame = None
     if bind_from and bind_from != "clip":
-        rig_Bw, rig_heads, rig_offsets = bind_armature(bind_from, names, rename=do_rename)
+        rig_Bw, rig_heads, rig_offsets = bind_armature(bind_from, names, mode=mode, prefix=prefix)
         rig_off = over(bind_off_rest(rig_heads, rb, order, P0))
         if rig_off:
             raise ValueError(f"--bind-from={bind_from} is not the rig rest.json was dumped from: its bind is off "
@@ -588,9 +667,13 @@ def main():
         print(f"frame check: {bind_frame['state']} ({bind_frame['agree']} of {bind_frame['bones']} bones agree)"
               + ("; the clip's bind is posed too far from the rest to confirm the file's world is the clip's"
                  if bind_frame["state"] == "inconclusive" else ""))
-        rig_leg_len, clip_leg_len = leg_length(rig_heads), leg_length(clip_heads)
+        rig_leg_len, clip_leg_len, scale_kind = paired_scale(rig_heads, clip_heads, rb)
+        if rig_leg_len <= 1e-9 or clip_leg_len <= 1e-9:
+            raise ValueError(f"--bind-from={bind_from}: neither the R15/vendor leg chain nor a root-to-Head span "
+                             "could be measured on both the rig file and the clip; cannot scale root motion")
         if not abs(rig_leg_len - clip_leg_len) <= BIND_LEG_TOL * clip_leg_len:
-            raise ValueError(f"--bind-from={bind_from}: its leg chain is {rig_leg_len:0.4f} units and the clip's "
+            label = "leg chain" if scale_kind == "leg_chain" else "root-to-Head span"
+            raise ValueError(f"--bind-from={bind_from}: its {label} is {rig_leg_len:0.4f} units and the clip's "
                              f"{clip_leg_len:0.4f}; pass the rig file at the clip's scale")
         bind_mismatch = over({n: math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(Bw[n] @ rig_Bw[n].T) - 1) / 2))))
                               for n in names})
@@ -598,12 +681,12 @@ def main():
             print(f"the clip's own bind is off the rig's by more than {BIND_TOL_DEG} deg at {listed(bind_mismatch)}; "
                   f"transferring from the rig's bind ({os.path.basename(bind_from)})")
         Bw = rig_Bw
-        rig_hips = rig_heads["LowerTorso"]
+        rig_hips = rig_heads[root_name]
         # A file placed elsewhere in the world, or a clip whose bind is itself
         # displaced (a flying pose), moves the `bind` root reference by the
         # same vector; the two cannot be told apart, so the distance is
         # reported rather than refused. The `first` reference does not read it.
-        hips_offset = float(np.linalg.norm(clip_heads["LowerTorso"] - rig_hips))
+        hips_offset = float(np.linalg.norm(clip_heads[root_name] - rig_hips))
     elif toe is None:
         clip_off = over(bind_off_rest(clip_heads, rb, order, P0))
         if clip_off and bind_from != "clip":
@@ -655,7 +738,18 @@ def main():
             raw = arm.pose.bones[src[n]].parent.name
             clip_parent = clip_names.get(raw, raw)
             rig_parent, off = rig_offsets.get(n, (None, None))
-            if rig_parent != clip_parent:
+            cmp_rig, cmp_clip = rig_parent, clip_parent
+            if mode == "rename":
+                # Neither file's bones are renamed any more (clip_bone_map
+                # matches by table + normalized name instead of physically
+                # renaming): a clip on "mixamorig:LeftShoulder"
+                # and a --bind-from file on "LeftShoulder" (the same bone,
+                # spelled two ways) would otherwise read as two different
+                # parents. Fold both sides the same way clip_bone_map already
+                # folds the bones it DOES match.
+                cmp_rig = normalize(rig_parent) if rig_parent is not None else rig_parent
+                cmp_clip = normalize(clip_parent) if clip_parent is not None else clip_parent
+            if cmp_rig != cmp_clip:
                 raise ValueError(f"--bind-from={bind_from}: {n}'s parent is {rig_parent} there and {clip_parent} "
                                  "in the clip, so its rest offset cannot be measured from the rig")
             offsets[n] = off / clip_scale
@@ -680,14 +774,23 @@ def main():
     # the bind pose (the rig's with --bind-from): their difference is the root
     # motion the transfer carries
     hips = []
-    rest_hips = rig_hips if rig_hips is not None else clip_heads["LowerTorso"]
+    rest_hips = rig_hips if rig_hips is not None else clip_heads[root_name]
+    # The bone the empirical g-search scores foot-trajectory fidelity against
+    # (foot_traj, below): "LeftFoot" when the clip drives it (unchanged from
+    # before), else "RightFoot", else Head (rig ingest guarantees every rig has one) --
+    # a rig with no feet at all (a spider's own leg segments) still gets a
+    # bone to score candidates on.
+    g_bone = next((b for b in ("LeftFoot", "RightFoot", "Head") if b in src), None)
+    if g_bone is None:
+        raise ValueError("no bone to score the axis-map search on: the clip drives none of LeftFoot, RightFoot "
+                         "or Head; pass --g=<candidate> to force the axis map instead")
     for f_, _A in enumerate(frames):
         bpy.context.scene.frame_set(fnums[f_])
-        wp = AWfull @ arm.pose.bones[src["LeftFoot"]].matrix
+        wp = AWfull @ arm.pose.bones[src[g_bone]].matrix
         fl.append(wp[0][3])
         ff.append(wp[1][3])
         fh.append(wp[2][3])
-        hp = AWfull @ arm.pose.bones[src["LowerTorso"]].matrix
+        hp = AWfull @ arm.pose.bones[src[root_name]].matrix
         hips.append(np.array([hp[0][3], hp[1][3], hp[2][3]]))
     if root_ref == "first" and hips:
         rest_hips = hips[0]
@@ -710,8 +813,10 @@ def main():
     # the rig height is feet-to-crown, so root motion came out 1.37x too large
     # (witnessed 2026-09-23: a death's 0.84-unit hip drop moved 47 studs where
     # the rig-to-clip scale, 41.2 studs a unit by a fit of the rig mesh, gives
-    # 34.5; the leg ratio gives 41.15).
-    clip_leg = leg_length(clip_heads)
+    # 34.5; the leg ratio gives 41.15). A rig or clip with no R15/vendor leg
+    # names at all (a spider's own leg segments) falls back to the root-to-Head
+    # span instead (paired_scale/root_head_span) -- the one length every
+    # rig and clip this pipeline accepts carries whatever its bone-naming convention.
 
     # all 24 proper axis-aligned rotations (signed permutation matrices,
     # det +1): the 5-candidate shortlist missed the right frame on the
@@ -725,15 +830,19 @@ def main():
                 M[row, col] = s
             if np.linalg.det(M) > 0.5:
                 CANDS[f"p{perm}s{signs}"] = M
-    # the rig's leg bones in its rest: a bone's pos is its offset from the parent
-    rig_leg = sum(float(np.linalg.norm(Pw[side + b])) for side in ("Left", "Right") for b in ("LowerLeg", "Foot"))
+    # rig_leg/clip_leg: leg_length(P0) is mathematically identical to summing
+    # each leg bone's own parent-relative offset (norm is rotation-invariant
+    # on a chain) -- computed from P0 (world rest origins, rig frame) instead
+    # so the SAME function that reads clip_heads also reads the rig, with the
+    # same root-to-Head fallback when neither has R15/vendor leg names.
+    rig_leg, clip_leg, k_source = paired_scale(P0, clip_heads, rb)
     if clip_leg <= 1e-9 or rig_leg <= 1e-9:
         raise ValueError(f"leg chain has no length (clip {clip_leg}, rig {rig_leg}): cannot scale root motion")
     k = rig_leg / clip_leg
     if hips_offset is not None:
         print(f"the rig's bind hips sit {hips_offset * k:0.3f} studs from the clip bind's; --root-ref=bind measures "
               "root motion from the rig's")
-    print(f"k = {k:0.4f} studs per clip unit (leg chain: rig {rig_leg:0.3f} studs, clip {clip_leg:0.4f} units)")
+    print(f"k = {k:0.4f} studs per clip unit ({k_source}: rig {rig_leg:0.3f} studs, clip {clip_leg:0.4f} units)")
     def min_rot(a, b):
         """Smallest rotation matrix taking unit-ish vector a onto b."""
         a = a / np.linalg.norm(a)
@@ -768,9 +877,9 @@ def main():
                 pr = rb[n]["parent"]
                 W[n] = _world(n, pr, A, W, g, F)
                 WP[n] = WP.get(pr, np.zeros(3)) + (W.get(pr, np.eye(3)) @ Pw[n])
-            lx.append(WP["LeftFoot"][0])
-            hy.append(WP["LeftFoot"][1])
-            fz.append(WP["LeftFoot"][2])
+            lx.append(WP[g_bone][0])
+            hy.append(WP[g_bone][1])
+            fz.append(WP[g_bone][2])
         return lx, fz, hy
 
     ID_F = {n: np.eye(3) for n in names}
@@ -782,6 +891,9 @@ def main():
         # character's facing (measured toe-heel) to rig facing (-Z). The
         # empirical range scoring near-tied physically impossible candidates
         # (up mapped to DOWN) on the X Bot clip (live find 2026-07-18).
+        if "LeftFoot" not in src:
+            raise ValueError("--mixamo/--ual: the clip does not drive LeftFoot, needed with the toe bone to "
+                             "measure facing; --g=<candidate> forces the axis map instead")
         heel = arm.data.bones[src["LeftFoot"]]
         dw = AW @ (np.array(toe.head_local) - np.array(heel.head_local))
         f = np.array([dw[0], dw[1], 0.0])
@@ -917,8 +1029,9 @@ def main():
     doc = {"hier": jhier, "frames": jframes, "traj": traj,
            "clip_seconds": frames[-1][0], "source": os.path.basename(clip_path),
            "root_motion": bool(emit_root), "root_ref": root_ref, "g": g_name, "g_forced": forced_g is not None,
+           "g_scored_on": g_bone,
            "root_range_studs": [round(float(v), 3) for v in root_range],
-           "k": round(float(k), 5), "k_source": "leg_chain",
+           "k": round(float(k), 5), "k_source": k_source,
            "root_y": root_y if emit_root else None, "root_xz": root_xz if emit_root else None,
            "ground": ground, "held": held,
            "bind_from": (bind_from if bind_from == "clip" else os.path.basename(bind_from)) if bind_from else None,

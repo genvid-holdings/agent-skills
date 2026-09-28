@@ -1,6 +1,6 @@
 ---
 name: genvid-roblox-character-generation
-description: Generation recipes for a rigged, textured, in-game-ready Roblox character via the MCP-first path — plate craft that conditions Cube's GenerateModelAsync, mesh output checks, the Mixamo-to-R15 rig recipe and skinned-rig wiring, world-space animation transfer and asset-naming provenance rules, and the governance calls (register_media/finalize_media_registration, record_approved_corrections) that make the output governed. Does not cover Studio/MCP transport or session mechanics — see genvid-roblox-studio-ops.
+description: Generation recipes for a rigged, textured, in-game-ready Roblox character via the MCP-first path — plate craft that conditions Cube's GenerateModelAsync, mesh output checks, the any-skeleton rig-prep recipe and skinned-rig wiring, world-space animation transfer and asset-naming provenance rules, and the governance calls (register_media/finalize_media_registration, record_approved_corrections) that make the output governed. Does not cover Studio/MCP transport or session mechanics — see genvid-roblox-studio-ops.
 compatibility: Drives the Genvid boundary (register_media, finalize_media_registration; record_approved_corrections is status:designed, not yet on prod) together with Roblox Studio's generation surfaces (generate_mesh, GenerationService:GenerateModelAsync) reached over Studio's own MCP server per genvid-roblox-studio-ops. See pack.json boundary_compat.
 ---
 
@@ -238,25 +238,36 @@ prompt's specific wardrobe.
 
 ## 3. The rig recipe
 
-Converting a Mixamo-convention skeleton, as an auto-rigger emits it, into an
-R15-compatible skinned FBX for Studio's 3D Importer. The conversion is
-character-agnostic:
+Preparing a rigged character — ANY skeleton, exactly as an auto-rigger or a
+hand rig delivers it — for the Roblox 3D Importer. There is no R15 conversion:
+no bone is renamed, folded away, or inserted. The prep is character-agnostic:
 
-- **Mixamo→R15 rename table + leaf-up bone fold**: the 15 keeper bones get
-  renamed to their R15 names directly; the 9 extra bones get their skin weights folded into an R15 neighbor, merged **leaf-up**
-  (children reparent to the removed bone's parent first) so chains reparent
-  cleanly.
-- **Armature-origin-at-root-bone + mesh-vertex-shift**: the root bone must
-  sit at the torso, not at the world origin — the importer maps it to `HumanoidRootPart` and hangs every
-  child bone's rest offset off it, so an origin-rooted skeleton floats the
-  whole visual mesh a full body-height above the ground. Relocate the
-  armature origin to the root bone, then shift the raw mesh vertex data by
-  the same offset (Roblox's far-LOD draws the raw mesh anchored at the root
-  bone node, so unshifted vertex data floats the far-distance visual by the
-  hip height even though the skinned close-range render is unaffected).
-- **`HumanoidRootNode` naming** — naming it `Root` instead fails the R15
-  guideline check; `HumanoidRootNode` is the name the Roblox avatar template
-  expects.
+- **The rig keeps its own skeleton, end to end.** The one exception is a
+  vendor container prefix on a bone's name (e.g. `mixamorig:`), which is
+  stripped off if present — a spelling cleanup, not a rename to a different
+  bone.
+- **A bone named exactly `Head` is required**, for player tracking: `rig
+  ingest` refuses to bind a rig that doesn't have one, naming the bones
+  present so it can be fixed and re-ingested.
+- **Armature-origin-at-root-bone + mesh-vertex-shift**: the rig's own root
+  bone (the sole parentless bone, or the one with the most descendants when
+  there's more than one) must sit at the character, not at the world origin —
+  the importer maps it to `HumanoidRootPart` and hangs every child bone's
+  rest offset off it, so an origin-rooted skeleton floats the whole visual
+  mesh a full body-height above the ground. Relocate the armature origin onto
+  that root bone, then shift the raw mesh vertex data by the same offset
+  (Roblox's far-LOD draws the raw mesh anchored at the root bone node, so
+  unshifted vertex data floats the far-distance visual by the hip height even
+  though the skinned close-range render is unaffected). A root bone already
+  at world origin is left untouched.
+- **Embedded textures over 2048 px on a side are downsized** before export —
+  the Roblox importer rejects a larger one — and the mesh is decimated back
+  under Roblox's per-`MeshPart` triangle cap when the source re-meshed over
+  it.
+- **FBX + GLB twin**: the prepped rig is exported once as the FBX the Roblox
+  3D Importer takes, and a second time, from the same scene, as glTF-binary —
+  the container the destination conformance profile can actually read — so
+  both the Studio import artifact and the checkable twin exist side by side.
 - **World-space rotation-delta transfer**: do not
   play a clip's local rotations as `Bone.Transform` — Roblox re-orients bone
   local frames per bone at FBX import, so source-local rotations land on the
@@ -294,7 +305,17 @@ physics are not usable as-is), applicable to any character on this pipeline:
    `HumanoidRootPart` surgery if left in place, so it has to be stripped and then explicitly rebuilt: the 6
    `Humanoid` NumberValues, per-`Bone` `OriginalPosition`, and
    `AvatarPartScaleType = "Classic"`.
-2. Rebuild `HumanoidRootPart` as a torso box at the `LowerTorso` bone.
+2. Rebuild `HumanoidRootPart` as a torso box at the rig's hip/root reference
+   point: the `LowerTorso` bone when the rig has one (unchanged for an
+   R15-shaped rig), else the mesh's own world-axis geometric centre — no bone
+   name required. Computed from the MeshParts' own corners
+   (`CFrame:PointToWorldSpace`), never `Model:GetBoundingBox()`: that box is
+   reported in the importer's pivot frame, which a freshly imported skinned
+   Model has rotated 90 degrees about X, so its Y is the character's depth,
+   not its height (the same trap `scale.luau`/`zoo_capture.luau` already dodge
+   with their own `worldHeight`/`worldBox` helpers). `groundfit` measures
+   `HipHeight` against the same point, and the two have to agree or the rig
+   floats or sinks by the difference.
 3. `WeldConstraint` every other part to it — each `MeshPart` of a
    multi-mesh import and the importer's bone-holder part (the root bone's
    parent) — with `CanCollide = false`, `Massless = true`. The
@@ -363,9 +384,10 @@ genvid import-generated-media <project-id> -c multipart \
 
 `target` and `stage` are omitted deliberately. They are optional as a pair, and
 together they claim a destination pipeline stage: the published vocabulary
-carries `roblox/r15-rigged` for a skinned R15 rig, and a mesh that has not been
-rigged yet satisfies neither that nor any other published stage. Add them only
-when the artifact really is at a stage the vocabulary names. A pair the
+carries `roblox/rigged` for a skinned rig kept on its own skeleton, and
+`roblox/r15-rigged` for a rig on the real R15 skeleton. A mesh that has not
+been rigged yet satisfies neither that nor any other published stage. Add them
+only when the artifact really is at a stage the vocabulary names. A pair the
 vocabulary does not know is refused outright, and the vocabulary is not
 published anywhere a caller can read it.
 
@@ -407,8 +429,10 @@ moment of the call. The finalize step's shape, exactly as shipped
   the generator under a different name (note the single-seeded-name
   limitation this implies).
 - On finalize, set `target` / `stage` for asset anchors: `target = "roblox"`,
-  `stage = "roblox/r15-rigged"` for rigged meshes. This is what makes the
-  artifact conformance-checkable afterwards with `check_conformance`.
+  `stage = "roblox/rigged"` for a rig kept on its own skeleton, or
+  `stage = "roblox/r15-rigged"` for a rig on the real R15 skeleton. This is
+  what makes the artifact conformance-checkable afterwards with
+  `check_conformance`.
 - **One media row per `generate_mesh` part.** A multi-part generation call
   produces several parts; capture each as its own media row.
 - **Upload a GEOMETRY proxy, not a render.** `proxy_filename` decides what
@@ -615,7 +639,7 @@ provider, model, params and cost the agent reports, and binds it. The pairs:
 |---|---|---|---|
 | plate | `plate emit front --prompt ... [--input-media-id <ref>]`, `plate emit views [--item back\|left\|right]` | `plate ingest front --item c1 [--asset-id ... \| --create-asset] <result>`, `plate ingest views --item <view> <result>` | text-to-image, or image-to-image with a reference |
 | mesh | `mesh emit model` | `mesh ingest model <result>` (GLB preferred; binary FBX or OBJ converted), which also preps and binds | image-to-3D |
-| rig | `rig emit model [--clip LABEL:DESCRIPTION ...]` | `rig ingest model --rig <result> [--clip LABEL=FILE ...] [--derived-from mesh\|plate]`, which also converts to R15 and binds | rigging |
+| rig | `rig emit model [--clip LABEL:DESCRIPTION ...]` | `rig ingest model --rig <result> [--clip LABEL=FILE ...] [--derived-from mesh\|plate]`, which also preps (no conversion; refuses a rig with no `Head` bone) and binds | rigging |
 | clips | `clips emit motion --clip <key> ...` | `clips ingest motion --clip <key> --mode mixamo\|r15\|rename\|ual <result>` | text-to-motion |
 
 `rig emit model --clip` asks the rigging model for library motions bundled with
@@ -624,7 +648,7 @@ the rig, one per label; `rig ingest model --clip LABEL=FILE` records each as
 `clips ingest motion --mode` names the skeleton convention the clip is authored
 on: `rename` (the rig's own bone names), `mixamo`, `ual` (Rigify `DEF-` names)
 or `r15`. `plate select-front --media-id <id>` records which bound candidate is
-the front plate. `mesh prep` / `mesh bind`, `rig r15` / `rig bind` and `plate
+the front plate. `mesh prep` / `mesh bind`, `rig prep` / `rig bind` and `plate
 bind` re-run the processing or the bind on what was already recorded (after a
 `ClaimPending`, or an ingest run with `--record-only`); `--supersede` binds
 different bytes for an item already bound, as a new row that supersedes it.
@@ -842,11 +866,15 @@ in the game:
 1. *Root motion is emitted.* `poses.py` writes the root bone's translation per
    frame under `frames[i].r` (the hips' world delta, mapped by the same `g` as
    the rotations, scaled by `k`, expressed in the root bone's rest frame);
-   `kfs.write` puts it in the LowerTorso pose position. `k` (recorded in the
-   poses doc) is the LEG-CHAIN ratio, hip joint to knee to ankle on both
-   sides, between rest.json and the clip's bind: an overall-height ratio read
-   off a library skeleton after the rename/merge spans about hips-to-skull,
-   not feet-to-crown, and makes root motion too large. A bone scale the clip
+   `kfs.write` puts it in the rig's own root bone's pose position. `k`
+   (recorded in the poses doc as `k`/`k_source`) is the LEG-CHAIN ratio, hip
+   joint to knee to ankle on both sides, between rest.json and the clip's
+   bind, when the R15 or Meshy/Mixamo vendor leg names are there to measure
+   it (`k_source: "leg_chain"`) -- an overall-height ratio read off a library
+   skeleton after the rename/merge spans about hips-to-skull, not
+   feet-to-crown, and makes root motion too large. A rig or clip with neither
+   leg-name convention (a spider's own per-leg segments, for one) falls back
+   to the root-to-Head span instead (`k_source: "root_to_head"`). A bone scale the clip
    keys (a library clip can key a scale on Hips on every frame) is stripped
    before the transfer, so every emitted quaternion is unit length. `k` also
    scales the truth ranges the empirical axis-map pick scores against
@@ -865,9 +893,11 @@ in the game:
    runs on one rig print the same `analytic g (clip faces (...))` line.
 3. *The pose tree mirrors the real bone chain.* The Animator matches rotations
    by pose name whatever the tree, but it applies a TRANSLATION only when the
-   tree is `HumanoidRootPart > HumanoidRootNode > LowerTorso`. `clips build`
-   writes the node pose unless `stages.wire.result.hasRootNode` is false (an adopted rig without the
-   bone, law 5); `build_kfs`'s ingest refuses a sequence whose node pose
+   tree is `HumanoidRootPart` > the rig's own root bone > its children
+   (`HumanoidRootNode > LowerTorso` on an R15-shaped rig; a spider's own
+   `GroundRoot` and its legs). `clips build` writes the root-bone pose unless
+   `stages.wire.result.hasRootNode` is false (an adopted rig without the
+   bone, law 5); `build_kfs`'s ingest refuses a sequence whose root-bone pose
    disagrees with the template.
 4. *The translation is divided by the model scale.* The Animator multiplies a
    pose translation by `Model:GetScale()`. `kfs.write`
@@ -875,13 +905,16 @@ in the game:
    `stages.wire.result.scale`; `build_kfs`'s ingest refuses a clip with root
    motion when the template's `GetScale()` no longer matches it.
 
-5. *A clip is bound to the skeleton it was built for.* A clip built on the
-   16-bone runner rig plays NOTHING useful on a 15-bone rig that hangs
-   `LowerTorso` straight under `HumanoidRootPart` with no `HumanoidRootNode`
-   for the translation to ride on. Transfer onto that rig's own rest dump
-   instead: with the tree `HumanoidRootPart > LowerTorso` (no node, which
-   `clips build` omits when the rig records no such bone) the translation
-   DOES apply on those rigs.
+5. *A clip is bound to the skeleton it was built for.* A rig no longer
+   converts onto a fixed bone count any more (it keeps its own
+   skeleton), so `clips build`'s root pose names the rig's OWN root bone
+   (`stages.rig.report.root`, the rig's own identified root bone -- Hips,
+   GroundRoot, HumanoidRootNode, whatever the rig calls it) rather than assuming
+   `HumanoidRootNode`; `hasRootNode` still decides it for an adopted rig with
+   no rig report. A clip built for one rig's tree (`HumanoidRootPart >
+   <that rig's root> > ...`) plays no translation on another rig whose root
+   bone sits elsewhere in the chain -- transfer onto the target rig's own
+   rest dump instead.
 6. *Cadence follows the square root of height.* `timing.scale_time` stretches
    a clip by `sqrt(height / 8)`, so a clip authored at height H plays on a
    rig of height h at speed `sqrt(H / h)`. A rig that borrows another rig's
@@ -1061,36 +1094,6 @@ clip item: an item carries only `cost_source` (`rig`, `none`, or
 `clips.generated.<clip>`), and no clip row attests "0". A bundled clip's row
 omits the cost fields, since the rig's row holds the spend.
 
-**Adopting a rig that already exists (`runner rig adopt`).** A parked template
-with no manifest (a rig handed over as a bare template, or one built outside
-this runner) gets a manifest whose chain starts at `rest`; plate/mesh/rig
-are not on it and are not pretended. The whole sequence for one new clip:
-
-    runner rig adopt --name Small --template <StudioTemplateName> --height 20 --project-id <project-id> \
-        --asset-id <cast-member uuid> --assignee <reviewer email> \
-        --production-title '<production title>' --out-dir out/small-adopted
-    runner rig adopt-emit --manifest out/small-adopted/manifest.json adopt_inspect   # Edit
-    runner studio ingest adopt_inspect --manifest ... <result>                        # fills wire: scale, hip, root-node flag
-    runner rig adopt-emit --manifest ... dump_rest                                    # Edit, against the parked template
-    runner studio ingest dump_rest --manifest ... <result>
-    runner clips transfer --manifest ... --clip Death --candidate 1                   # archive fall (an adopted rig has no rig ingest)
-    runner clips build --manifest ... --clip Death --anims-dir <Rojo-mapped dir>        # then let Rojo sync it
-    runner clips build-kfs --manifest ... --clip Death                                # Edit, read-only verify
-    runner studio ingest build_kfs --manifest ... --clip Death <result>
-    runner clips publish-clip --manifest ... --clip Death                             # Edit
-    runner studio ingest publish_clip --manifest ... --clip Death <result>
-    runner clips bench --manifest ... --clip Death                                    # PLAY, Server; blocks ~clip length
-    runner studio ingest bench_clip --manifest ... --clip Death <result>
-    runner clips bind --manifest ... --ids Death=<roblox id>                          # then the orchestrator runs the two payloads
-
-`name` is the brand-free stem the titles are built from; `--template` is the
-Studio name and is what every Studio step targets, under the park folder
-(`--park-folder`, or `PARK_FOLDER`'s default), not workspace.
-`--production-title` is required here for the same reason it is on `init`: this
-chain ends in `clips bind`, which writes governed media under an asset whose
-description carries the title, and there is no default to fall back to. Demanding
-it at adoption fails before any Studio step runs rather than at the first bind.
-
 **Bench a published clip (`clips bench`).** Play mode, Server datamodel, one
 blocking bridge call: a clone of the template plays the published id and the
 step reports `hipsDrop`, `hipsBack`, `headEndAboveSole` (sole plane =
@@ -1179,20 +1182,24 @@ manifest keys it writes stay out of a pack that is mirrored publicly.
 
 **Eval matrix.** `runner eval` prints and writes the eval-matrix table, rows
 E1-E32 (E25 retired: no stage ever wrote its input, so it could only ever
-report PENDING), reading only files on disk plus the manifest — it never
+report PENDING; E10, E10b, E10c, E16, E17 and E18 are also retired -- each
+measured a fixed human proportion or R15 bone name a rig kept on its own
+skeleton is not guaranteed to have, with no name-agnostic replacement),
+reading only files on disk plus the manifest — it never
 imports another stage module, so it runs standalone regardless of which stages
 exist yet. A gate row with no evidence on disk reports FAIL, never PASS and
-never silently skipped; a non-gate row with no evidence reports PENDING; rows
+never silently skipped; a non-gate row with no evidence reports PENDING; a row
+that needs a bone the rest dump does not record for this rig (E19's treadmill
+foot, E30-E32's bench feet/hips) is gated on the rig having it, so a rig
+without one reports PENDING rather than a false FAIL; rows
 that measure a Studio artifact the runner cannot itself produce (E13/E14
 far-LOD grounding, E24 the walk probe) read whatever `studio.py`'s
 probe/capture ingests wrote into `<out>/eval.json`, never a value this module
 computes. Every row scores a stage this pack owns, which is why the matrix lives
 here rather than in a per-title skill; what IS per-title is the calibration of a
-few thresholds, and each of those carries the measurement it came from --
-for example, E17/E18's knee-twist threshold of 0.25 is what separates a
-library-authored walk (0.042 knee twist) from an archive retarget of the
-same motion (0.25-0.31). A per-title skill runs this group against its own
-manifest instead of shipping a copy.
+few thresholds, and each of those carries the measurement it came from. A
+per-title skill runs this group against its own manifest instead of shipping
+a copy.
 
 **Platform-tier clip registration.** A published clip is platform-custodied
 media — the bytes live only as the Roblox asset id `publish_clip` returns —
@@ -1294,7 +1301,7 @@ matching `studio ingest`):
     python3 runner/cli.py mesh ingest model --manifest ... --provider ... --model ... --cost ... <result>
     python3 runner/cli.py rig emit model --manifest ... --estimate <USD> [--clip Walk:'<motion>']
     python3 runner/cli.py rig ingest model --manifest ... --provider ... --model ... --cost ... --rig <result> [--clip Walk=<file>]
-    # import the R15 rig into Studio with the 3D Importer; the template now sits in workspace
+    # import the rig into Studio with the 3D Importer; the template now sits in workspace
     python3 runner/cli.py studio emit scale --manifest ...                           # Edit; right after the import, before dump_rest
     python3 runner/cli.py studio emit dump_rest --manifest ...                       # Edit
     python3 runner/cli.py studio emit groundfit --manifest ...                       # Edit
@@ -1321,4 +1328,5 @@ The other Studio steps are optional or situational: `inspect_template` reads an
 already-parked template's structure (attribute names and holders, Humanoid
 values, alignment settings) so a title can check the wiring against it;
 `zoo_capture` frames the Studio camera on the character for a review capture; `applymesh` is the
-surface pass above; `adopt_inspect` belongs to `rig adopt`.
+surface pass above; `adopt_inspect` reads a pre-existing parked template's own wire shape (scale,
+hip, bone list, whether it carries a root node) into a manifest's `wire` stage.

@@ -7,7 +7,12 @@ from xml.sax.saxutils import escape
 import timing
 
 PRIORITY = {"Idle": 0, "Movement": 1, "Action": 2}
-ROOT_NODE = "HumanoidRootNode"  # the rig's root bone between HumanoidRootPart and LowerTorso
+# Backward-compatible default: the name every R15-converted rig used for the
+# bone between HumanoidRootPart and the rest of the skeleton. An own-skeleton
+# rig's root bone can be named anything; `write()`'s
+# `root_node` param takes that name directly rather than assuming this one --
+# see its docstring.
+ROOT_NODE = "HumanoidRootNode"
 BRANDS = ("mixamo", "meshy", "quaternius", "tripo", "cascadeur")
 
 def clip_name(character, clip, version=1):
@@ -68,6 +73,15 @@ def _omitted(poses):
 
 
 def write(poses, path, *, name, height_studs, loop, priority, root_scale=1.0, root_node=True, time_scale=None):
+    """`root_node` names the rig's own root bone (the one between
+    HumanoidRootPart and the rest of the skeleton): pass the bone name (e.g.
+    from the manifest's rig report) so the pose written matches the actual
+    rig, not an assumed one. `True` keeps the pre-existing default,
+    `ROOT_NODE` ("HumanoidRootNode", every R15-converted rig's name for it);
+    `False` (or any other falsy value) omits the node pose altogether, for a
+    rig with no such bone. A named bone that is already in `poses["hier"]` (an
+    own-skeleton rig's root, which dump_rest keeps) is written once, as the
+    pose under HumanoidRootPart, never wrapped in a copy of itself."""
     hier = poses["hier"]
     omit = _omitted(poses)
     kids = {}
@@ -94,18 +108,28 @@ def write(poses, path, *, name, height_studs, loop, priority, root_scale=1.0, ro
         t = timing.scale_time(fr["t"], height_studs) if time_scale is None else fr["t"] * float(time_scale)
         r = fr.get("r") or {}
         # The pose tree must mirror the rig's real bone chain for a TRANSLATION to
-        # apply: on the R15-converted skinned rigs the root bone under
-        # HumanoidRootPart is HumanoidRootNode (rig_r15 names it so; the R15
-        # guideline expects it), and LowerTorso hangs off that. A tree that skips
-        # the node still applies every rotation (matched by name) but the Animator
-        # drops the root translation (witnessed 2026-09-08: four pose-tree
-        # variants, only HumanoidRootPart > HumanoidRootNode > LowerTorso moved
-        # the hips). The node pose is identity; root motion rides on LowerTorso.
-        # A rig with no such bone (`root_node=False`) takes the translation on
-        # HumanoidRootPart > LowerTorso instead (witnessed 2026-09-10).
+        # apply: on an R15-converted rig the root bone under HumanoidRootPart was
+        # always named HumanoidRootNode, and LowerTorso hung off that. An
+        # own-skeleton rig's root bone can carry any name, which
+        # is why `root_node` now takes the name itself rather than a fixed
+        # constant -- the caller reads it off the manifest's rig report. A tree
+        # that skips the node still applies every rotation (matched by name) but
+        # the Animator drops the root translation (witnessed 2026-09-08: four
+        # pose-tree variants, only HumanoidRootPart > <root bone> > the rest of
+        # the skeleton moved the hips). The node pose is identity; root motion
+        # rides on its child. A rig with no such bone (`root_node=False`) takes
+        # the translation directly under HumanoidRootPart instead (witnessed
+        # 2026-09-10).
+        # The wrapper is only for a root node the dump left out (dump_rest
+        # excludes a bone named HumanoidRootNode and promotes its children). An
+        # own-skeleton rig's root bone stays IN the dump, so it is already the
+        # pose under HumanoidRootPart, carrying the root motion itself; wrapping
+        # it again would nest a second pose of the same name the rig does not
+        # have, and nothing below it would match.
         bones = [pose(c, fr["p"], r) for c in sorted(kids.get("HumanoidRootPart", []))]
-        if root_node:
-            bones = [_pose_xml(ROOT_NODE, [[1,0,0],[0,1,0],[0,0,1]], bones, ref())]
+        root_name = (root_node if isinstance(root_node, str) else ROOT_NODE) if root_node else None
+        if root_name and root_name not in hier:
+            bones = [_pose_xml(root_name, [[1,0,0],[0,1,0],[0,0,1]], bones, ref())]
         root = _pose_xml("HumanoidRootPart", [[1,0,0],[0,1,0],[0,0,1]], bones, ref())
         frames.append("<Item class=\"Keyframe\" referent=\"%s\"><Properties><string name=\"Name\">Keyframe</string>"
                       "<float name=\"Time\">%.5f</float></Properties>%s</Item>" % (ref(), t, root))

@@ -49,7 +49,7 @@ import mesh
 import request
 import studio
 import timing
-from impact import impact_time
+from impact import BONES as IMPACT_BONES, has_any_bone, impact_time
 
 POSES_SCRIPT = Path(__file__).parent / "blender" / "poses.py"
 CONTACT_SCRIPT = Path(__file__).parent / "blender" / "contact.py"
@@ -459,7 +459,7 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
     if root_xz == "none":
         argv.append("--root-xz=none")
     r = subprocess.run(argv, capture_output=True, text=True)
-    # --python-exit-code 1 (as rig.r15() uses): without it Blender exits 0 on a
+    # --python-exit-code 1 (as rig.prep() uses): without it Blender exits 0 on a
     # raised exception too, and a stale poses.json from an earlier run would
     # then read as a successful transfer.
     if r.returncode != 0 or not out_path.exists():
@@ -750,9 +750,14 @@ def build(m, clip, *, anims_dir=None, version=None, name=None, time_scale=None):
     # ingest) is what the Animator multiplies pose translations by, root motion
     # and --translate bones alike
     root_scale = float(wire.get("scale") or 1.0)
-    # An adopted rig records whether it carries the HumanoidRootNode bone
-    # (adopt_inspect); a runner-built R15 rig always does (clip transfer law 3).
-    root_node = wire.get("hasRootNode") is not False
+    # The rig's own root bone, as rig prep identified it (Hips, GroundRoot,
+    # HumanoidRootNode, whatever the rig calls it) -- kfs.write's root_node
+    # param takes that name directly. An adopted manifest (kind="adopted") has
+    # no rig stage at all: its wire stage IS the adopt_inspect reading, and
+    # whether it carries a root bone is all THAT records, so it falls back to
+    # the bare bool exactly as before this change.
+    rig_root = ((m["stages"].get("rig") or {}).get("report") or {}).get("root")
+    root_node = rig_root if rig_root else wire.get("hasRootNode") is not False
     kfs.write(poses, path, name=name, height_studs=m["height_studs"], loop=item["loop"], priority=item["priority"],
               root_scale=root_scale, root_node=root_node, time_scale=time_scale)
     frames = poses["frames"]
@@ -800,6 +805,11 @@ def impact(m, clip):
     poses = json.loads(Path(item["poses"]).read_text())
     t = impact_time(poses["traj"])
     if t <= 0.0:
+        if not has_any_bone(poses["traj"]):
+            raise RuntimeError(
+                "impact.impact_time: the %r clip's trajectory carries none of %s (this rig has no "
+                "bone by any of those names); pass a rig that has one of them, or "
+                "measure this title's impact another way" % (clip, ", ".join(IMPACT_BONES)))
         raise RuntimeError(
             "impact.impact_time found no lift-then-strike in the %r clip's trajectory (0.0 back); "
             "recording that as attackImpactDelaySecs would fire damage on frame one -- try a "

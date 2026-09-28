@@ -17,7 +17,7 @@ one check the bake-off saw failing -- `rig.forward-axis`, +Z measured against a
 required -Z on the GLB twins (witnessed 2026-09-04) -- is a consumer-side
 convention difference (the Roblox importer reads the FBX as -Z; Genvid's glTF
 reader measured the identical-coordinate twin as +Z), and it is fixed where the
-twin is made, in `blender/rig_r15.py`'s half-turn export (a turned twin passes
+twin is made, in `blender/rig_prep.py`'s half-turn export (a turned twin passes
 the profile outright), so the profile passes on the artifact rather
 than past a list of excuses kept here. The terminal media is
 `stages.rig.media_id` on a skinned-rig manifest; a static (prop)
@@ -73,7 +73,9 @@ def run(m, run=subprocess.run, corrections_tool_present=False, allow_unregistere
     # Prefer the glTF-binary twin when the rig stage bound one: the
     # roblox/r15-rigged conformance profile (spec 1.1.0) reads gltf-binary only
     # and fails an FBX at container.format (witnessed 2026-09-04), so checking
-    # the FBX row records "nonconformant" for a rig that is fine. The FBX row is
+    # the FBX row records "nonconformant" for a rig that is fine. A rig now
+    # binds at roblox/rigged (rig.py's RIGGED_STAGE), whose profile also reads
+    # gltf-binary only, so this same preference still applies. The FBX row is
     # still the Studio import artifact and still in the provenance graph.
     terminal_media_id = terminal.get("glb_media_id") or terminal["media_id"]
     clip_media_ids = dict(m["stages"].get("clips", {}).get("media_ids") or {})
@@ -93,8 +95,9 @@ def run(m, run=subprocess.run, corrections_tool_present=False, allow_unregistere
             if not tolerate_failure:
                 raise
             # A clip (KeyframeSequence) or a capture is never 3D model media --
-            # get-media-conformance's model profile (roblox/r15-rigged and
-            # friends) 422s on it (non-zero exit under check=True). That is not
+            # get-media-conformance's model profile (roblox/r15-rigged,
+            # roblox/rigged, and friends) 422s on it (non-zero exit under
+            # check=True). That is not
             # a conformance failure to roll up, it is the wrong check being
             # asked of the wrong media kind, so it is recorded as skipped
             # rather than aborting the whole record stage or counting against
@@ -135,9 +138,19 @@ def run(m, run=subprocess.run, corrections_tool_present=False, allow_unregistere
 
     hand_tuned = m["stages"].get("wire", {}).get("hand_tuned") or {}
     if hand_tuned and corrections_tool_present:
+        # `conformance_stage` is written by rig.bind() only: a rig bound after
+        # it existed carries the stage it was actually bound at, and the
+        # payload names that directly. Two other cases fall back to
+        # LEGACY_R15_RIGGED_STAGE here: a rig bound before this field existed
+        # (found at the legacy stage it was really bound at, not assumed onto
+        # the current one), and a static asset's mesh terminal, which never
+        # carries a conformance_stage at all -- mesh.bind() binds with no
+        # target/stage (see mesh.py) -- so this payload's stage for a mesh
+        # terminal is unchanged from before this field existed.
+        stage = terminal.get("conformance_stage") or genvid_bind.LEGACY_R15_RIGGED_STAGE
         genvid_bind.mcp_payload("record_approved_corrections", m["out_dir"],
             project_id=m["project_id"], asset_id=m["asset_id"], media_id=terminal_media_id,
-            link_type=genvid_bind.MODEL_LINK, target="roblox", stage="roblox/r15-rigged",
+            link_type=genvid_bind.MODEL_LINK, target="roblox", stage=stage,
             payload=json.dumps(hand_tuned),
             note="hand-tuned wiring corrections approved for %s" % m["name"])
     elif not hand_tuned:

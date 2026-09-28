@@ -60,7 +60,21 @@ local function bone(name)
 	local b = m:FindFirstChild(name, true)
 	return (b and b:IsA("Bone")) and b or nil
 end
-local hips, head, lfoot, rfoot = bone("LowerTorso"), bone("Head"), bone("LeftFoot"), bone("RightFoot")
+-- HIPS_BONE/HEAD_BONE/LFOOT_BONE/RFOOT_BONE default to the R15 names
+-- (studio.emit's RENDER_DEFAULTS overrides HIPS_BONE from the rig's own
+-- identified root bone, stages.rig.report.root, when the manifest has one).
+-- A rig kept on its own
+-- skeleton without a bone by one of these names still
+-- benches: `bone()` already returns nil for one it cannot find, and every
+-- read below already nil-guards; missingBones just names which, so the
+-- ingest reports why rather than the generic "no played samples".
+local hips, head, lfoot, rfoot =
+	bone("{{HIPS_BONE}}"), bone("{{HEAD_BONE}}"), bone("{{LFOOT_BONE}}"), bone("{{RFOOT_BONE}}")
+local missingBones = {}
+if not hips then table.insert(missingBones, "{{HIPS_BONE}}") end
+if not head then table.insert(missingBones, "{{HEAD_BONE}}") end
+if not lfoot then table.insert(missingBones, "{{LFOOT_BONE}}") end
+if not rfoot then table.insert(missingBones, "{{RFOOT_BONE}}") end
 local soleY = -(hrp.Size.Y / 2) - (m:GetAttribute("{{HIP_ATTR}}") or 0)
 local function rel(b)
 	if not b then return nil end
@@ -137,6 +151,7 @@ local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({
 	headEndAboveSole = last.head and (last.head[2] - soleY) or nil,
 	heldAtEnd = heldAtEnd, endedPlaying = endedPlaying, frozen = frozen, frozeAt = frozeAt, frozeTp = frozeTp,
 	lastTp = last.tp, scheduled = scheduled, extrema = extrema, timeline = samples,
+	missingBones = missingBones,
 })
 print(runnerResult)
 return runnerResult

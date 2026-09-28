@@ -30,8 +30,20 @@ local anim = Instance.new("Animation"); anim.AnimationId = "{{WALK_ID}}"
 -- 46.78 studs/s, twice.
 local fadeTime = 0.1
 local track = animator:LoadAnimation(anim); track.Looped = true; track:Play(fadeTime, 1, {{SPEED}})
+-- FOOT_BONE defaults to "LeftFoot" (studio.emit's RENDER_DEFAULTS); a rig kept
+-- on its own skeleton with no bone by that name cannot be
+-- treadmilled at all, so the run is reported rather than indexing a nil foot.
 local foot = nil
-for _, d in m:GetDescendants() do if d:IsA("Bone") and d.Name == "LeftFoot" then foot = d end end
+for _, d in m:GetDescendants() do if d:IsA("Bone") and d.Name == "{{FOOT_BONE}}" then foot = d end end
+if not foot then
+	m:Destroy()
+	local runnerResult = "RUNNER_RESULT " .. HttpService:JSONEncode({
+		strideStudsPerSec = nil, samples = 0, clipLength = track.Length,
+		missingBones = { "{{FOOT_BONE}}" },
+	})
+	print(runnerResult)
+	return runnerResult
+end
 -- MEASURE_STRIDE_BEGIN -- pure function, no Roblox API: kept isolable (by
 -- these markers) so a test can run this exact source under a bare Luau
 -- interpreter on a synthetic samples table, feeding both the OLD arguments

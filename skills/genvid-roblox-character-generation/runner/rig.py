@@ -1,13 +1,19 @@
 """Stage 3: the rig. The caller rigs the bound mesh with a rigging model of its
-own choosing; the runner converts the rig to the 15-bone R15 skeleton and binds it.
+own choosing; the runner preps the rig -- ANY skeleton, its own bones kept,
+sockets included -- and binds it. There is no R15 conversion: no bone's
+identity is changed (a vendor container prefix, e.g. `mixamorig:`, is
+stripped off a name if present, which is a spelling cleanup, not a rename),
+no bone is folded away, and no bone is inserted.
 
     rig emit model     -> request citing the bound mesh, with optional library
                           clips named by label and description
     rig ingest model --rig <file-or-url> [--clip label=<file-or-url> ...]
                        -> records the rig, writes each clip to
                           <out>/clips/<label>.glb (stages.rig.clip_files), then
-                          converts to R15 and binds in the same invocation
-    rig r15            -> re-runs the conversion on the recorded rig
+                          preps and binds it in the same invocation. Refuses
+                          before binding if the rig has no bone named exactly
+                          `Head`.
+    rig prep           -> re-runs the prep on the recorded rig
     rig bind           -> re-runs the bind (after a ClaimPending or --record-only)
     rig ingest surface-texture
                        -> records and binds a generated texture for the surface
@@ -37,27 +43,32 @@ TEXTURE_STEP = TEXTURE_ITEM = "surface-texture"
 TEXTURE_STEM = "surface.texture"
 TEXTURE_EXT = {"png": ".png", "jpeg": ".jpg", "webp": ".webp"}
 # The runner's own processing, attested on the surface-pass row.
-CONVERTER_PROVIDER, CONVERTER_MODEL = "blender", "rig_r15"
+CONVERTER_PROVIDER, CONVERTER_MODEL = "blender", "rig_prep"
+# Required on every character rig for player tracking; checked
+# before binding, on the prep's own recorded bone list.
+REQUIRED_BONE = "Head"
 
 TARGET = {"format": list(RIG_KINDS), "preferred": "glb",
           "notes": "A skinned rig of the input mesh, GLB or binary FBX (7.1 or later) with its textures embedded. "
-                   "Library clips, when requested, come back as one GLB per label on this rig's skeleton."}
-MUST_SATISFY = [("a humanoid biped skeleton whose bones map to the R15 layout (Mixamo-style naming or any spelling "
-                 "the runner's bone tables normalize)"),
+                   "Any skeleton is accepted; a bone named exactly Head is required. Library clips, when "
+                   "requested, come back as one GLB per label on this rig's skeleton."}
+MUST_SATISFY = ["a skeleton of any shape, its own bones kept as delivered (sockets included)",
+                "a bone named exactly %r (the ingest refuses otherwise)" % REQUIRED_BONE,
                 "skin weights on the mesh; every vertex weighted",
-                "the rig survives conversion to the 16-bone R15 skeleton (the conversion refuses otherwise)",
                 "the input mesh's pose and facing: it is already decimated and turned to face the plate"]
 CHECKED_AT_INGEST = ["rig type by content: GLB or binary FBX (7.1 or later)",
                      "each clip is GLB and its label matches %s" % CLIP_LABEL.pattern,
                      "a request was emitted (the budget check ran), unless --unrequested",
-                     "the R15 conversion keeps 16 bones (it refuses otherwise)"]
-NO_BLENDER = ("rig ingest needs Blender on PATH: the R15 conversion runs in it. Install Blender, or pass "
-              "--record-only to record the result now and run `rig r15` then `rig bind` where Blender is installed.")
+                     "a bone named exactly %r is present (the ingest refuses otherwise, naming it)" % REQUIRED_BONE]
+NO_BLENDER = ("rig ingest needs Blender on PATH: the prep runs in it. Install Blender, or pass "
+              "--record-only to record the result now and run `rig prep` then `rig bind` where Blender is installed.")
 OLD_SHAPE = ("stages.rig has no generated.model: this rig came from the old generator, whose attestation this "
              "bind no longer sends. Record it first with `rig ingest model --unrequested \"<reason>\" "
              "--provider <p> --model <m> --cost <c>|--cost-unobserved --rig <file>` (the raw rig file, e.g. "
-             "rig.raw.glb), adding --supersede when the stage already has a media_id; that ingest converts "
+             "rig.raw.glb), adding --supersede when the stage already has a media_id; that ingest preps "
              "and binds it.")
+NO_HEAD = ("rig ingest: this rig has no bone named exactly %r. Player tracking needs it on every character rig -- "
+           "fix the rig's bone names (bones present: %%s) and re-run `rig ingest model`." % REQUIRED_BONE)
 
 
 def _st(m):
@@ -235,7 +246,7 @@ def ingest_model(m, rig_result, att, *, clips=(), derived_from="mesh", prompt=No
     raw = Path(rec["artifact"])
     dest = Path(m["out_dir"]) / (RESULT_STEM + RIG_EXT[rec["kind"]])
     if raw.resolve() != dest.resolve():
-        # A caller's local file is copied in, so a later `rig r15` or surface pass
+        # A caller's local file is copied in, so a later `rig prep` or surface pass
         # still finds it when the original is gone.
         shutil.copyfile(raw, dest)
     manifest.set_stage(m, "rig", artifact_raw=str(dest)); manifest.save(m)
@@ -247,7 +258,7 @@ def ingest_model(m, rig_result, att, *, clips=(), derived_from="mesh", prompt=No
     if outcome == "unchanged" and bound:
         bind_clips(m, supersede=supersede, run=run)
         return bound
-    r15(m, blender=blender)
+    prep(m, blender=blender)
     return bind(m, run=run, supersede=supersede)
 
 
@@ -296,46 +307,62 @@ def ingest_surface_texture(m, result, att, *, unrequested, prompt=None, render_t
     return mid
 
 
-def _convert_r15(out, raw, dst, texture, blender):
-    """Shell the stage_f-port Blender script converting `raw` to a 15-bone R15
-    skinned FBX at `dst`, optionally re-textured with `texture`. Shared by r15()
-    (the rig stage) and surface_prep() (the R15 surface-pass re-bake, which
-    writes to a different `dst` and never touches the rig stage's own
-    artifact/report/media_id)."""
-    script = Path(__file__).parent / "blender" / "rig_r15.py"
+def _check_head(rep):
+    """Refuse a rig with no bone named exactly REQUIRED_BONE, naming the bones
+    it does have so the author (or its agent) can fix it. Called from prep()
+    before the rig is recorded as prepped, and again from bind() as a defense
+    for a manifest written before this check existed, so a Head-less rig
+    never reaches a governed write."""
+    bones = rep.get("bones") or []
+    if REQUIRED_BONE not in bones:
+        raise request.IngestError(NO_HEAD % (", ".join(sorted(bones)) or "none"))
+
+
+def _prep_rig(out, raw, dst, texture, blender):
+    """Shell the Blender script that preps `raw` -- its own skeleton kept,
+    sockets included, no conversion -- into a skinned FBX at `dst`, optionally
+    re-textured with `texture`. Shared by prep() (the rig stage) and
+    surface_prep() (the surface-pass re-bake, which writes to a different
+    `dst` and never touches the rig stage's own artifact/report/media_id)."""
+    script = Path(__file__).parent / "blender" / "rig_prep.py"
     # --python-exit-code 1: without it Blender exits 0 even when the script
     # raised, and a stale rig.report.json from a previous run would then read
-    # as a successful conversion. The dst.exists() check below closes the same
+    # as a successful prep. The dst.exists() check below closes the same
     # hole for a report written before an exporter crash.
     argv = [blender or shutil.which("blender"), "--background", "--python-exit-code", "1",
             "--python", str(script), "--", raw, str(dst)]
     if texture: argv.append(texture)
     r = subprocess.run(argv, capture_output=True, text=True)
-    # blender/rig_r15.py always writes Path(out_fbx).parent / "rig.report.json" --
-    # it does not namespace the report by the fbx name -- so r15() and
+    # blender/rig_prep.py always writes Path(out_fbx).parent / "rig.report.json" --
+    # it does not namespace the report by the fbx name -- so prep() and
     # surface_prep() (same `out` dir, different `dst`) both write and read THIS
     # SAME on-disk path. The read here is always fresh (right after this call's
-    # own subprocess exits, before any other call could run), so neither r15()'s
+    # own subprocess exits, before any other call could run), so neither prep()'s
     # nor surface_prep()'s in-memory `rep` -- and therefore neither manifest
     # write -- is ever stale. But without copying it out, a later call clobbers
     # the earlier call's on-disk report.json; the dst-namespaced copy below
     # keeps both reports inspectable on disk after both stages have run.
     rep_path = out / "rig.report.json"
     rep = json.loads(rep_path.read_text()) if rep_path.exists() else {"bones": [], "warnings": [r.stderr[-1000:]]}
-    if r.returncode != 0 or len(rep["bones"]) != 16 or not dst.exists():
-        raise RuntimeError("R15 conversion failed (rc=%s, fbx_written=%s): %s" % (r.returncode, dst.exists(), rep))
+    if r.returncode != 0 or not dst.exists():
+        raise RuntimeError("rig prep failed (rc=%s, fbx_written=%s): %s" % (r.returncode, dst.exists(), rep))
     if rep_path.exists():
         (dst.parent / (dst.name + ".report.json")).write_text(rep_path.read_text())
     return rep
 
 
-def r15(m, texture=None, blender=None):
-    out = Path(m["out_dir"]); raw = m["stages"]["rig"]["artifact_raw"]; dst = out / "rig.r15.fbx"
-    rep = _convert_r15(out, raw, dst, texture, blender)
-    # blender/rig_r15.py exports the same scene twice: the FBX the Roblox 3D
-    # Importer takes, and a glTF-binary twin Genvid's roblox/r15-rigged
+def prep(m, texture=None, blender=None):
+    out = Path(m["out_dir"]); raw = m["stages"]["rig"]["artifact_raw"]; dst = out / "rig.prep.fbx"
+    rep = _prep_rig(out, raw, dst, texture, blender)
+    # The Head check runs BEFORE the artifact/report are recorded: a rig that
+    # fails it must not leave stages.rig looking prepped (a later `rig bind`
+    # would otherwise happily bind a Head-less rig -- bind() only checks that
+    # `artifact` and `report` exist, not what the report says).
+    _check_head(rep)
+    # blender/rig_prep.py exports the same scene twice: the FBX the Roblox 3D
+    # Importer takes, and a glTF-binary twin Genvid's roblox/rigged
     # conformance profile can actually read. Record the twin only when it is on
-    # disk, so a manifest built by an older conversion keeps its old shape.
+    # disk, so a manifest built by an older prep keeps its old shape.
     glb = dst.with_suffix(".glb")
     if glb.exists():
         manifest.set_stage(m, "rig", artifact_glb=str(glb))
@@ -399,30 +426,37 @@ def bind(m, run=subprocess.run, supersede=False):
     if not rec:
         raise ValueError(OLD_SHAPE)
     if not st.get("artifact") or "report" not in st:
-        raise ValueError("no converted rig on the manifest: run `rig r15` before `rig bind`")
+        raise ValueError("no prepped rig on the manifest: run `rig prep` before `rig bind`")
+    _check_head(st["report"])
     # Media-bind-only site, covers BOTH governed writes below (the FBX row
     # and, when there is one, its GLB twin) -- one claim check before either runs.
     genvid_bind.ensure_claim(m, m["asset_id"], "rig.bind")
-    # The bound artifact is the R15 conversion of the caller's rig, so the
-    # conversion is recorded under params.runner, never fused into model_name.
+    # The bound artifact is the runner's own prep of the caller's rig (its own
+    # skeleton kept, no conversion), so the prep is recorded under
+    # params.runner, never fused into model_name.
     runner = {"stage": "rig", "report": st["report"],
-              "conversion": {"provider": CONVERTER_PROVIDER, "model": CONVERTER_MODEL, "to": "r15"},
+              "conversion": {"provider": CONVERTER_PROVIDER, "model": CONVERTER_MODEL, "to": "prep"},
               "derived_from": rec.get("derived_from")}
     kw = request.bind_kwargs(rec, runner=runner, artifact=st["artifact"])
     mid = genvid_bind.import_media(m["project_id"], link_type=genvid_bind.MODEL_LINK, asset_id=m["asset_id"],
-                                   stage="roblox/r15-rigged", target="roblox", run=run, **kw)
+                                   stage=genvid_bind.RIGGED_STAGE, target="roblox", run=run, **kw)
     # Persist after EACH governed write, the same shape plate.bind() and
     # mesh.bind() use. Saving only after the last one means a failure on a later
     # write leaves the rig model row created in Genvid with no media_id on the
     # manifest: is_done() reads the stage as not-done and a re-run creates a
     # duplicate rig row with a duplicate cost attestation. The preview list is reset
     # here too, so a re-run after a partial bind cannot keep ids from an older row
-    # that still had them.
-    manifest.set_stage(m, "rig", media_id=mid, preview_media_ids=[]); manifest.save(m)
+    # that still had them. `conformance_stage` records which Genvid stage this
+    # row was actually bound at, so a reader (record.py's corrections payload)
+    # can find a rig bound before RIGGED_STAGE existed instead of assuming it.
+    manifest.set_stage(m, "rig", media_id=mid, conformance_stage=genvid_bind.RIGGED_STAGE,
+                       preview_media_ids=[]); manifest.save(m)
     # The GLB twin, when the conversion produced one: Genvid's roblox/r15-rigged
     # conformance profile reads gltf-binary only and fails an FBX at
     # container.format (witnessed 2026-09-04), so E26 has nothing to measure
-    # without this row. It is the SAME conversion in another container, so it
+    # without this row. These rows now bind at roblox/rigged (RIGGED_STAGE,
+    # above), whose profile also reads gltf-binary only, so the twin's purpose
+    # here is unchanged. It is the SAME conversion in another container, so it
     # cites the same derivation inputs as the FBX row -- not the FBX row itself,
     # which is a sibling export, not an ancestor -- and attests $0: the rig spend
     # is already attested once, above, and attesting it twice would overstate
@@ -436,8 +470,12 @@ def bind(m, run=subprocess.run, supersede=False):
     # for one scene, so they do not disagree. The two CONSUMERS (the Roblox 3D
     # Importer vs. Genvid's roblox/r15-rigged profile) read that one scene's
     # handedness two different ways, and which side holds the convention is
-    # not witnessed (see blender/rig_r15.py's GLB_TWIN_YAW_DEG comment).
-    # blender/rig_r15.py now turns the twin's scene a half turn
+    # not witnessed (see blender/rig_prep.py's GLB_TWIN_YAW_DEG comment). The
+    # twin's own reason for existing -- a gltf-binary-only reader -- still
+    # holds now that these rows bind at roblox/rigged (above); this half-turn
+    # fix does not depend on whether that profile's own facing check works
+    # the same way.
+    # blender/rig_prep.py turns the twin's scene a half turn
     # about up before the glTF export (GLB_TWIN_YAW_DEG) and reads back whether
     # that turn actually landed on the armature, recording the result in
     # rig.report.json as glb_twin_yaw_deg -- 180 when it landed, 0 when an
@@ -451,10 +489,10 @@ def bind(m, run=subprocess.run, supersede=False):
         twin = dict(kw, path=st["artifact_glb"], cost=cost.no_vendor_call(),
                     params=dict(kw["params"], container="glb", forward_axis="-Z" if twin_yaw == 180 else "+Z",
                                 twin_rotation_deg=twin_yaw,
-                                note="same conversion as the FBX row; glTF-binary for the roblox/r15-rigged "
+                                note="same conversion as the FBX row; glTF-binary for the roblox/rigged "
                                      "conformance profile; turned %d deg about up relative to the FBX" % twin_yaw))
         glb_mid = genvid_bind.import_media(m["project_id"], link_type=genvid_bind.MODEL_LINK, asset_id=m["asset_id"],
-                                           stage="roblox/r15-rigged", target="roblox", run=run, **twin)
+                                           stage=genvid_bind.RIGGED_STAGE, target="roblox", run=run, **twin)
         manifest.set_stage(m, "rig", glb_media_id=glb_mid); manifest.save(m)
     # The two Blender workbench preview frames are NOT bound. What is witnessed
     # (2026-09-04) is only the outcome: the preview-render binds were the one
@@ -500,9 +538,9 @@ def _is_recorded_texture(texture, recorded):
 
 
 def surface_prep(m, texture=None, blender=None, run=subprocess.run, texture_media_id=None):
-    """Surface pass: re-runs the R15 conversion on the EXISTING
+    """Surface pass: re-runs the prep on the EXISTING
     character's raw rig FBX (stages.rig.artifact_raw) with a new stylized texture,
-    into rig.r15.surface.fbx -- a sibling of the primary rig.r15.fbx, never
+    into rig.prep.surface.fbx -- a sibling of the primary rig.prep.fbx, never
     overwriting it -- then binds the result as `genvid_bind.MODEL_LINK`
     (`cast_member_model`), the same link type `mesh.bind`, `rig.bind` and
     `clips.bind` already use for a model artifact on a `cast_member` asset.
@@ -533,12 +571,16 @@ def surface_prep(m, texture=None, blender=None, run=subprocess.run, texture_medi
     out = Path(m["out_dir"])
     rig_st = m["stages"]["rig"]
     raw = rig_st["artifact_raw"]
-    dst = out / "rig.r15.surface.fbx"
-    rep = _convert_r15(out, raw, dst, texture, blender)
+    dst = out / "rig.prep.surface.fbx"
+    rep = _prep_rig(out, raw, dst, texture, blender)
+    # Same guard as prep(): before recording, not after -- a Head-less re-bake
+    # must not leave surface_artifact/surface_report on the manifest for a
+    # later bind to wave through.
+    _check_head(rep)
     manifest.set_stage(m, "rig", surface_artifact=str(dst), surface_report=rep,
                        surface_previews=[str(dst) + ".view0.png", str(dst) + ".view1.png"])
     manifest.save(m)
-    # The surface pass is the runner's own conversion: no model ran, so it
+    # The surface pass is the runner's own prep: no model ran, so it
     # attests the converter and no cost, and cites the rig (and the texture,
     # when it is a bound media row) it was made from.
     inputs = [str(rig_st["media_id"])] + ([str(texture_media_id)] if texture_media_id else [])
@@ -547,11 +589,11 @@ def surface_prep(m, texture=None, blender=None, run=subprocess.run, texture_medi
     genvid_bind.ensure_claim(m, m["asset_id"], "rig.surface")
     mid = genvid_bind.import_media(m["project_id"], path=str(dst), link_type=genvid_bind.MODEL_LINK,
         asset_id=m["asset_id"], model_provider=CONVERTER_PROVIDER, model_name=CONVERTER_MODEL,
-        render_type=RENDER_TYPE, prompt="R15 skinned rig re-textured for the surface pass",
+        render_type=RENDER_TYPE, prompt="skinned rig re-textured for the surface pass",
         params={"stage": "surface-pass", "report": rep, "texture": str(texture),
-                "model_type": "r15-conversion"},
+                "model_type": "rig-prep"},
         input_media_ids=inputs, cost=cost.no_vendor_call(),
-        stage="roblox/r15-rigged", target="roblox", run=run)
+        stage=genvid_bind.RIGGED_STAGE, target="roblox", run=run)
     manifest.set_stage(m, "rig", surface_media_id=mid); manifest.save(m)
     return mid
 
@@ -565,7 +607,7 @@ def register(sub):
     em.add_argument("--clip", action="append", default=[], metavar="LABEL:DESCRIPTION",
                     help="a library motion to request with the rig (repeatable); the label becomes the file name")
     em.set_defaults(func=_emit_model)
-    i = s.add_parser("ingest", help="record the caller's rig, then convert and bind it")
+    i = s.add_parser("ingest", help="record the caller's rig, then prep and bind it")
     ist = i.add_subparsers(dest="step", required=True)
     im = ist.add_parser("model", help="the rig and its bundled clips, each a local file or a URL")
     request.add_ingest_args(im, item_help="not used: the rig is one item", positional=False)
@@ -579,8 +621,9 @@ def register(sub):
     it = ist.add_parser(TEXTURE_STEP, help="a generated texture for the surface pass (always --unrequested)")
     request.add_ingest_args(it, item_help="not used")
     it.set_defaults(func=_ingest_texture)
-    b = s.add_parser("r15"); b.add_argument("--manifest", required=True); b.add_argument("--texture")
-    b.set_defaults(func=lambda x: r15(manifest.load(x.manifest), x.texture))
+    b = s.add_parser("prep", help="re-run the prep (no conversion) on the recorded rig")
+    b.add_argument("--manifest", required=True); b.add_argument("--texture")
+    b.set_defaults(func=lambda x: prep(manifest.load(x.manifest), x.texture))
     c = s.add_parser("bind"); c.add_argument("--manifest", required=True)
     c.add_argument("--supersede", action="store_true",
                    help="bind new bytes for a bundled clip that is already bound, as a new row that supersedes it")
@@ -595,12 +638,6 @@ def register(sub):
     sp.add_argument("--texture-media-id", help="the texture's Genvid media id, cited as an input (default: the row "
                                                    "`rig ingest surface-texture` bound)")
     sp.set_defaults(func=_surface_prep_cli)
-
-    # adopt / adopt-emit: a rig that already exists in Studio gets a manifest
-    # whose chain starts at rest (adopt.py); the verbs live here because the
-    # orchestrator thinks of it as a rig operation, not a new group.
-    import adopt
-    adopt.register(s)
 
 
 def _surface_prep_cli(args):
