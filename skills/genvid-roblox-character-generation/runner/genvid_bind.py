@@ -52,11 +52,25 @@ class GenvidBindTimeout(GenvidCliTimeout):
     pass
 
 
+class GenvidCliError(subprocess.CalledProcessError):
+    """A `genvid` call through `_run` exited non-zero. Still a CalledProcessError, so
+    every caller that catches one is unchanged, but its message carries what the CLI
+    printed: CalledProcessError's own str() names only the exit status, which left a
+    Windows seat's failed bind (2026-09-28) reading `returned non-zero exit status 1`
+    with the real cause ("unable to read multipart file ...") hidden in stderr."""
+
+    def __str__(self):
+        said = (self.stderr or "").strip() or (self.stdout or "").strip()
+        return "%s\n%s" % (super().__str__(), said) if said else super().__str__()
+
+
 def _run(argv, body=None, run=subprocess.run, timeout=READ_TIMEOUT_S):
     try:
         r = run(argv, input=body, capture_output=True, text=True, check=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         raise GenvidCliTimeout("`%s` did not answer within %ss" % (" ".join(map(str, argv)), timeout))
+    except subprocess.CalledProcessError as e:
+        raise GenvidCliError(e.returncode, e.cmd, e.stdout, e.stderr) from None
     out = r.stdout.strip()
     return json.loads(out) if out else {}
 
@@ -276,6 +290,8 @@ def cli_version(run=subprocess.run):
     """The installed `genvid` CLI's version string, as `genvid version` prints it."""
     try:
         r = run(["genvid", "version"], capture_output=True, text=True, check=True, timeout=READ_TIMEOUT_S)
+    except subprocess.CalledProcessError as e:
+        return "unknown (`genvid version` failed: %s)" % GenvidCliError(e.returncode, e.cmd, e.stdout, e.stderr)
     except (subprocess.SubprocessError, OSError) as e:
         return "unknown (`genvid version` failed: %s)" % e
     return r.stdout.strip() or "unknown"

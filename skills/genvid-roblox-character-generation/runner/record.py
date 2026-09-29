@@ -103,14 +103,14 @@ def run(m, run=subprocess.run, corrections_tool_present=False, allow_unregistere
             # rather than aborting the whole record stage or counting against
             # the verdict. Only the terminal (model) media below is held to
             # "the boundary's verdict and only that" without this tolerance.
-            # str(e) alone drops stderr (CalledProcessError.__str__ only names
-            # the exit status), so a real wrong bind -- the CLI 404s a media id
-            # that is not linked to this asset, per its own --help -- would
-            # read identically to the sanctioned "not 3D model media" 422 here.
-            # Fold e.stderr in so a reviewer can tell the two apart from the
-            # skip reason alone (eval row E26 reads this field).
-            return {"skipped": "get-media-conformance failed for %s (media %s): %s: %s"
-                                % (label, media_id, e, (e.stderr or "").strip())}
+            # str(e) carries the CLI's stderr (genvid_bind.GenvidCliError), so a
+            # real wrong bind -- the CLI 404s a media id that is not linked to
+            # this asset, per its own --help -- reads differently from the
+            # sanctioned "not 3D model media" 422 here, and a reviewer can tell
+            # the two apart from the skip reason alone (eval row E26 reads this
+            # field).
+            return {"skipped": "get-media-conformance failed for %s (media %s): %s"
+                                % (label, media_id, e)}
 
     # The terminal artifact (the rig's GLB twin, or the mesh for a static
     # asset) is the only entry the manifest marks as 3D model media; its
