@@ -131,6 +131,48 @@ LODS = ("close", "far")
 TEMPLATE_OF = {"treadmill_scaled": "treadmill"}
 
 
+# Refusals Studio gives an AssetService:CreateAssetAsync upload, each with the
+# setting that fixes it. Neither message says where its setting lives. Both were
+# witnessed 2026-09-28 on a Windows seat: the first from execute_luau with the
+# Studio beta off, the second from a Script in Play with the experience setting
+# off (the needle is the message's own suffix, which names no one API).
+UPLOAD_REFUSALS = (
+    ("CreateAssetAsync and CreateAssetVersionAsync are not available yet",
+     "Studio's beta CreateAssetAsync Lua API is off on this seat: in Studio, File > Beta Features, tick "
+     "CreateAssetAsync Lua API, save, and restart Studio (a per-user, per-machine setting)"),
+    ("Go to the Security Tab in Experience Settings to enable this API",
+     "the experience's Allow Mesh / Image APIs is off: Game Settings > Security > Allow Mesh / Image APIs, "
+     "which only the group owner can set"),
+)
+
+
+def explain_upload_refusal(message):
+    """The fix for a known upload refusal, or None for any other message."""
+    for needle, fix in UPLOAD_REFUSALS:
+        if needle in str(message or ""):
+            return fix
+    return None
+
+
+def _luau_string(s):
+    """A double-quoted Luau string literal. Printable ASCII only: JSON writes a
+    control character as \\u00XX, which Luau does not read."""
+    if not (s.isascii() and s.isprintable()):
+        raise ValueError("_luau_string: not printable ASCII: %r" % s)
+    return json.dumps(s)
+
+
+def _upload_refusal_hint():
+    """`explainUploadRefusal(msg)` as Luau: the message plus ` -- fix: <fix>` for a
+    known refusal (UPLOAD_REFUSALS, the one source), the message alone otherwise."""
+    lines = ["local function explainUploadRefusal(msg)", "\tmsg = tostring(msg)"]
+    for needle, fix in UPLOAD_REFUSALS:
+        lines.append("\tif string.find(msg, %s, 1, true) then return msg .. %s end"
+                     % (_luau_string(needle), _luau_string(" -- fix: " + fix)))
+    lines += ["\treturn msg", "end"]
+    return "\n".join(lines)
+
+
 # Template params with a safe default when a caller renders without emit().
 # SETTLED_BOTTOM empty means "no settle has run": probe_feet's own tonumber()
 # reads that as nil and falls back to the hip, saying so in its result.
@@ -171,7 +213,12 @@ RENDER_DEFAULTS = {"SPEED": 1, "SETTLED_BOTTOM": "", "MAX_WAIT": 25, "BENCH_X": 
                     # same value clips.build() fed kfs.write; unchanged default for
                     # an adopted manifest (no rig report), which keeps kfs.write's
                     # own ROOT_NODE default.
-                    "ROOT_BONE": "HumanoidRootNode"}
+                    "ROOT_BONE": "HumanoidRootNode",
+                    # explainUploadRefusal(msg) for every template that uploads with
+                    # CreateAssetAsync, the pack's and a game's alike (render merges
+                    # these defaults into every step). Multi-line, so render refuses it
+                    # inside a `--` comment.
+                    "UPLOAD_REFUSAL_HINT": _upload_refusal_hint()}
 
 # Ingest handlers contributed by `register_steps`, consulted before any of
 # ingest()'s own step branches.
