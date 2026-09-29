@@ -57,11 +57,19 @@ class GenvidCliError(subprocess.CalledProcessError):
     every caller that catches one is unchanged, but its message carries what the CLI
     printed: CalledProcessError's own str() names only the exit status, which left a
     Windows seat's failed bind (2026-09-28) reading `returned non-zero exit status 1`
-    with the real cause ("unable to read multipart file ...") hidden in stderr."""
+    with the real cause ("unable to read multipart file ...") hidden in stderr. Both
+    streams are kept: the CLI answers a failed call with `exit code N` alone on stderr
+    and the response body on stdout (witnessed 2026-09-29 on a `genvid get-asset` for
+    an id that does not exist), so keeping stderr alone lost a 409 naming the media
+    to reuse."""
 
     def __str__(self):
-        said = (self.stderr or "").strip() or (self.stdout or "").strip()
-        return "%s\n%s" % (super().__str__(), said) if said else super().__str__()
+        return "\n".join([super().__str__()] + _streams(self))
+
+
+def _streams(e):
+    """The non-empty streams of a failed `genvid` call, stderr first."""
+    return [s for s in ((e.stderr or "").strip(), (e.stdout or "").strip()) if s]
 
 
 def _run(argv, body=None, run=subprocess.run, timeout=READ_TIMEOUT_S):
@@ -311,8 +319,10 @@ def cli_read(argv, timeout=READ_TIMEOUT_S, run=subprocess.run):
     except FileNotFoundError:
         raise GenvidReadError("`%s`: the genvid CLI is not on PATH" % cmd)
     except subprocess.CalledProcessError as e:
-        err = (e.stderr or e.stdout or "").strip()
-        if "unknown command" in err:
+        # Both streams: the CLI prints `exit code N` alone on stderr and the body on stdout.
+        # A missing command is read from stderr alone, so a body quoting the phrase is not one.
+        err = "\n".join(_streams(e))
+        if "unknown command" in (e.stderr or ""):
             raise GenvidCommandMissing("`%s`: this genvid CLI has no %r command; install a genvid CLI whose "
                                        "`genvid --help` lists it" % (cmd, argv[1]))
         raise GenvidReadError("`%s` exited %s: %s" % (cmd, e.returncode, err))

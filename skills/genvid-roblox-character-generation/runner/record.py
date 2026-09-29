@@ -103,7 +103,7 @@ def run(m, run=subprocess.run, corrections_tool_present=False, allow_unregistere
             # rather than aborting the whole record stage or counting against
             # the verdict. Only the terminal (model) media below is held to
             # "the boundary's verdict and only that" without this tolerance.
-            # str(e) carries the CLI's stderr (genvid_bind.GenvidCliError), so a
+            # str(e) carries both CLI streams (genvid_bind.GenvidCliError), so a
             # real wrong bind -- the CLI 404s a media id that is not linked to
             # this asset, per its own --help -- reads differently from the
             # sanctioned "not 3D model media" 422 here, and a reviewer can tell
