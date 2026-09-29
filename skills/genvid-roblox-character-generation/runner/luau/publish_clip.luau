@@ -27,13 +27,21 @@ local HttpService = game:GetService("HttpService")
 local ServerStorage = game:GetService("ServerStorage")
 local AssetService = game:GetService("AssetService")
 
+{{UPLOAD_REFUSAL_HINT}}
+
 local kfs = ServerStorage.Assets.Anims["{{CLIP_NAME}}"]
 assert(kfs:IsA("KeyframeSequence"), "{{CLIP_NAME}} is not a KeyframeSequence; run clips build, sync it with Rojo, then build_kfs")
 
-local result, assetId = AssetService:CreateAssetAsync(kfs, Enum.AssetType.Animation, {
-	Name = "{{CLIP_NAME}}",
-	Description = "{{DESCRIPTION}}",{{CREATOR_FIELDS}}
-})
+-- A refused upload raises; the pcall re-raises it with the setting that fixes it.
+local called, result, assetId = pcall(function()
+	return AssetService:CreateAssetAsync(kfs, Enum.AssetType.Animation, {
+		Name = "{{CLIP_NAME}}",
+		Description = "{{DESCRIPTION}}",{{CREATOR_FIELDS}}
+	})
+end)
+if not called then
+	error(explainUploadRefusal(result), 0)
+end
 assert(result == Enum.CreateAssetResult.Success,
 	"CreateAssetAsync returned " .. tostring(result) .. " for {{CLIP_NAME}}")
 

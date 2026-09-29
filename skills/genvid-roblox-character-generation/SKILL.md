@@ -853,7 +853,13 @@ in Play/Server, `Animator:LoadAnimation` of a published id the same account
 owns (`bench_clip`). `publish_clip` calls `AssetService:CreateAssetAsync` on
 the sequence directly, which returns a real Roblox asset id from the MCP
 bridge's Edit context; `CreateAssetAsync` publishes a KeyframeSequence but
-rejects a MeshPart or a Model. `wire` (same stage as `park` and `capture_ids`) also
+rejects a MeshPart or a Model. When Studio refuses the upload itself, the
+step's error ends with ` -- fix: ` and the setting to change: Studio's beta
+**CreateAssetAsync Lua API** (File > Beta Features, per user and machine;
+restart Studio), or the experience's **Allow Mesh / Image APIs** (Game Settings >
+Security; only the group owner can set it). The mapping is
+`studio.UPLOAD_REFUSALS`, and a game's own upload templates get the same Luau
+through the `{{UPLOAD_REFUSAL_HINT}}` render default. `wire` (same stage as `park` and `capture_ids`) also
 has to force `Humanoid.RigType` to R15 and destroy any `AnimationController`
 the 3D Importer parked beside the Humanoid the runner creates: either one
 silently stalls every animation track's `TimePosition` at zero — an R6
