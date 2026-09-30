@@ -363,7 +363,14 @@ def triangle_count(meshes):
 
 
 def decimate_to_cap(meshes, cap=TRI_CAP, target=TRI_TARGET):
-    """Collapse-decimate the skinned meshes under `cap`, returning (tris, applied).
+    """Collapse-decimate each skinned mesh over `cap` down to `target`, returning
+    (total tris, applied, {mesh name: {"tris": n}}).
+
+    The cap is per mesh object because the engine's is per skinned MeshPart: a
+    rig of several parts may carry more than `cap` in total, and each part under
+    the cap is left exactly as it came. Summing the parts and decimating all of
+    them to fit one cap crushes every part of a multi-part rig for nothing. The
+    total belongs to a class triangle budget, which is the caller's to check.
 
     Vendors re-mesh: Tripo's animate_rig came back at 101,184 triangles
     regardless of the mesh task's face_limit, and Meshy's rigging returned
@@ -377,18 +384,20 @@ def decimate_to_cap(meshes, cap=TRI_CAP, target=TRI_TARGET):
     final R15 ones, and before the report, so unweighted_frac and the weighted-
     vertex counts describe the mesh that ships.
     """
-    tris = triangle_count(meshes)
-    if tris <= cap:
-        return tris, False
-    ratio = float(target) / float(tris)
+    applied = False
     for me in meshes:
+        tris = triangle_count([me])
+        if tris <= cap:
+            continue
         mod = me.modifiers.new("R15Decimate", "DECIMATE")
         mod.decimate_type = "COLLAPSE"
-        mod.ratio = ratio
+        mod.ratio = float(target) / float(tris)
         mod.use_collapse_triangulate = True
         bpy.context.view_layer.objects.active = me
         bpy.ops.object.modifier_apply(modifier=mod.name)
-    return triangle_count(meshes), True
+        applied = True
+    parts = {me.name: {"tris": triangle_count([me])} for me in meshes}
+    return sum(p["tris"] for p in parts.values()), applied, parts
 
 
 def mesh_span(meshes):
@@ -617,12 +626,14 @@ def main():
     # Post-rig triangle cap. Every measurement below (bone list aside) is taken
     # after this, so the report describes the exported mesh rather than the one
     # the source handed back.
-    tris_r15, decimated = decimate_to_cap(meshes)
-    print("triangles:", tris_r15, "(decimated)" if decimated else "(under the cap already)")
-    if tris_r15 > TRI_CAP:
-        msg = "WARN: %d triangles after the decimate, still over the %d cap" % (tris_r15, TRI_CAP)
-        print(msg)
-        warnings.append(msg)
+    tris_r15, decimated, parts = decimate_to_cap(meshes)
+    print("triangles:", tris_r15, "per part:", {n: p["tris"] for n, p in parts.items()},
+          "(decimated)" if decimated else "(every part under the cap already)")
+    for name, p in sorted(parts.items()):
+        if p["tris"] > TRI_CAP:
+            msg = "WARN: part %r has %d triangles after the decimate, still over the %d cap" % (name, p["tris"], TRI_CAP)
+            print(msg)
+            warnings.append(msg)
 
     # The full bone list, kept verbatim -- no 16-bone assumption: an own-skeleton
     # rig may carry any number of bones, sockets included.
@@ -642,6 +653,7 @@ def main():
         "unweighted_frac": unweighted_fraction(meshes, final),
         "tris_r15": tris_r15,
         "tris_decimated": decimated,
+        "parts": parts,
         "shoulder_sep": facing["shoulder_sep"],
         "shoulder_sep_frac": facing["shoulder_sep_frac"],
         "mesh_span": facing["mesh_span"],

@@ -263,9 +263,12 @@ no bone is renamed, folded away, or inserted. The prep is character-agnostic:
   though the skinned close-range render is unaffected). A root bone already
   at world origin is left untouched.
 - **Embedded textures over 2048 px on a side are downsized** before export —
-  the Roblox importer rejects a larger one — and the mesh is decimated back
-  under Roblox's per-`MeshPart` triangle cap when the source re-meshed over
-  it.
+  the Roblox importer rejects a larger one — and each mesh part the source
+  re-meshed over Roblox's per-`MeshPart` triangle cap is decimated back under
+  it. The cap is per part: a part under it is left as it came, however many
+  triangles the parts carry together, and the rig report's `parts` lists each
+  part's triangles (`mesh prep` reports the same for the cooked mesh). The
+  total is for a class triangle budget to check, not this cap.
 - **FBX + GLB twin**: the prepped rig is exported once as the FBX the Roblox
   3D Importer takes, and a second time, from the same scene, as glTF-binary —
   the container the destination conformance profile can actually read — so
@@ -286,7 +289,14 @@ no bone is renamed, folded away, or inserted. The prep is character-agnostic:
   not of the clip:
   transfer the walk first, read its pick from the poses doc (`g`), and pass
   `--g=<that name>` for every other clip on that skeleton (`poses.py` records
-  `g` and `g_forced` on every doc so a review can tell which it was). The
+  `g` and `g_forced` on every doc so a review can tell which it was, and the
+  search's own `g_pick`, `g_score` and `runner_up_score`, lower is better, so
+  a near-tie reads as one; a clear margin is still no proof the pick is right
+  off a walk). An unforced pick whose runner-up scores within 0.85 of it is
+  refused as a near-tie, and `clips transfer` says what to do: reuse the
+  Walk's orientation (`--g-from Walk`, named when the Walk is on the
+  manifest), pass one by hand with `--g` for a clip from a different export,
+  or transfer the Walk first. A forced map is never refused. The
   runner does this for you: `clips transfer --g-from Walk` reads the Walk
   doc's `g` and forces it (`--g <name>` forces one by name), and the clip item
   records `g`, `g_forced` and `g_from`.
@@ -783,7 +793,17 @@ template is wired and parked (Stage order, above):
   its source citation are below.
 - `clips impact` measures an attack clip's impact time and `clips speed-scale`
   derives the walk's speed scale from the in-engine treadmill measurement;
-  both are numbers a title's game reads. The impact is the striking limb's
+  both are numbers a title's game reads. The treadmill runs in Play (in Edit a
+  track's time does not advance, and the step refuses); it plays the published
+  Walk (`--param WALK_ID=<asset id>` overrides it, and a bare number is given
+  the `rbxassetid://` prefix), samples 1.25 played loops and never less than 4
+  s, and reads the planted foot's net travel over each stance divided by the
+  stance's time, so a held-pose walk reads as truly as a smooth one. A scale
+  over `clips.SPEED_SCALE_MAX` (2.0) is refused as an under-read stride; there
+  is no lower limit, since a large character's walk plays well below speed 1.
+  Check the walk plays, then set it by hand with `clips speed-scale --scale <scale>`,
+  recorded as `animSpeedScaleSource: "hand"` (a measured one reads
+  `"treadmill"`). The impact is the striking limb's
   low. Each foot and hand's drop is its largest fall from any sample to a
   later one (a follow-through may end higher than the wind-up); among the
   limbs whose drop is at least half the largest, the striker is the one whose
@@ -1325,9 +1345,9 @@ matching `studio ingest`):
     python3 runner/cli.py clips build-kfs --manifest ... --clip Walk                 # then studio ingest build_kfs --clip Walk
     python3 runner/cli.py clips publish-clip --manifest ... --clip Walk              # then studio ingest publish_clip --clip Walk
     python3 runner/cli.py clips bench --manifest ... --clip Walk                     # Play, Server; then studio ingest bench_clip --clip Walk
-    python3 runner/cli.py studio emit treadmill --manifest ... --param WALK_ID=rbxassetid://<id>   # Play
+    python3 runner/cli.py studio emit treadmill --manifest ...                        # Play; plays the published Walk
     python3 runner/cli.py clips speed-scale --manifest ...                           # needs walk_speed on the manifest
-    python3 runner/cli.py studio emit treadmill_scaled --manifest ... --param WALK_ID=rbxassetid://<id>   # Play, at the derived speed
+    python3 runner/cli.py studio emit treadmill_scaled --manifest ...                 # Play, at the derived speed
     python3 runner/cli.py clips bind --manifest ... --ids Walk=<RobloxAssetId>       # the id publish-clip returned; the orchestrator runs the payloads
     python3 runner/cli.py clips registered --manifest ... --clip Walk --media-id <Genvid media id>
     python3 runner/cli.py record run --manifest ...
