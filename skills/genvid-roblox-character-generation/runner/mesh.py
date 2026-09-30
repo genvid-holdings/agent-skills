@@ -43,7 +43,7 @@ TARGET = {
 }
 CHECKED_AT_INGEST = ["model type by content: GLB, binary FBX (7.1 or later) or OBJ",
                      "a request was emitted (the budget check ran), unless --unrequested",
-                     "at most %d triangles after prep's decimate (prep refuses otherwise)" % TRI_CAP]
+                     "at most %d triangles in each mesh part after prep's decimate (prep refuses otherwise)" % TRI_CAP]
 NO_BLENDER = ("mesh ingest needs Blender on PATH: prep decimates and turns the mesh in it, and converts an "
               "FBX or OBJ to GLB. Install Blender, or pass --record-only to record the result now and run "
               "`mesh prep` then `mesh bind` where Blender is installed.")
@@ -85,7 +85,7 @@ def _prompt(m):
 def _must_satisfy(m):
     rules = ["a single textured model of the subject in the input image(s), base color included",
              "delivered as GLB (preferred) or FBX; " + NO_TEXTURE,
-             "about %d triangles or fewer (prep decimates anything over, which loses detail)" % TRI_CAP]
+             "about %d triangles or fewer in each mesh part (prep decimates a part over that, which loses detail)" % TRI_CAP]
     if not _static(m):
         rules += ["the plate's pose: symmetric A-pose, arms clear of the torso, legs apart",
                   "humanoid biped proportions: the mesh is rigged after this"]
@@ -255,8 +255,11 @@ def prep(m, blender=None, plate=None):
                         str(raw), str(cooked), str(TRI_CAP)], capture_output=True, text=True, check=True)
     rep = json.loads([l for l in r.stdout.splitlines() if l.startswith("{")][-1])
     (out / "mesh.report.json").write_text(json.dumps(rep, indent=2))
-    if rep["tris_out"] > TRI_CAP:
-        raise RuntimeError("mesh still over cap: %s" % rep)
+    # The cap is per part (per skinned MeshPart); the total is a class budget's to check.
+    over = {n: p["tris"] for n, p in sorted(rep["parts"].items()) if p["tris"] > TRI_CAP}
+    if over:
+        raise RuntimeError("mesh part(s) still over the %d-triangle cap after the decimate: %s"
+                           % (TRI_CAP, ", ".join("%r %d" % kv for kv in over.items())))
     if not rep["genus0"]:
         manifest.note(m, "mesh is not genus-0: %s (allowed for skinned rigs; recorded)" % rep)
     entry = manifest.set_stage(m, "mesh", artifact=str(cooked), report=rep)

@@ -509,6 +509,17 @@ def creator_render(group_id):
     }
 
 
+def _walk_id(m, given):
+    """The walk the treadmill plays: the caller's --param WALK_ID, else the
+    published Walk clip's `roblox_id` (the id `clips bench` plays). A bare asset
+    number gets the `rbxassetid://` prefix an Animation's AnimationId needs."""
+    walk = ((m["stages"].get("clips") or {}).get("items") or {}).get("Walk") or {}
+    wid = str(given if given not in (None, "") else walk.get("roblox_id") or "").strip()
+    if not wid:
+        raise ValueError("the treadmill needs the published Walk: run `clips publish-clip --clip Walk` and "
+                         "`studio ingest publish_clip --clip Walk` first, or pass --param WALK_ID=<asset id>")
+    return "rbxassetid://" + wid if wid.isascii() and wid.isdigit() else wid
+
 def emit(m, step, **params):
     if step == "publish_clip":
         if "UNVERIFIED_OK" in params:
@@ -524,6 +535,8 @@ def emit(m, step, **params):
     params.setdefault("NAME", m["name"]); params.setdefault("TEMPLATE", template)
     params.setdefault("HEIGHT", m["height_studs"]); params.setdefault("SCALE", 1)
     params.setdefault("MODEL_PATH", "workspace:FindFirstChild(%r, true)" % template)
+    if step in ("treadmill", "treadmill_scaled"):
+        params["WALK_ID"] = _walk_id(m, params.get("WALK_ID"))
     params.setdefault("WALK_ID", ""); params.setdefault("CAMERA", "close"); params.setdefault("LOD", "close")
     if step in ("treadmill", "treadmill_scaled", "bench_clip"):
         # The rig's own root/hip bone (stages.rig.report.root) overrides the

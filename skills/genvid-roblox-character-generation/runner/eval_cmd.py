@@ -22,13 +22,12 @@ here: a stage module either conforms to them or this file is updated to match):
     HIPS_BONE/HEAD_BONE/LFOOT_BONE/RFOOT_BONE bench_clip.luau could not find
     on this rig, read by `_bench_unusable` to name the reason rather than
     read the generic "no played samples."
-  - `stages.rig.report.parts`: no producer writes this yet (rig_prep.py's
-    report carries one skinned mesh's total, `tris_r15`). If a rig report
-    ever DOES break the mesh into named parts (more than one skinned
-    MeshPart, whose combined triangles a decimate that caps the total would
-    let exceed Roblox's per-MeshPart limit), it is `{part_name: {"tris":
-    int, ...}}`; E3b (`_row_E3b`) reads it in preference to `tris_r15` and
-    checks each part against the cap.
+  - `stages.rig.report.parts` and `stages.mesh.report.parts`: the triangles of
+    each mesh part, `{part_name: {"tris": int}}`, written by
+    blender/rig_prep.py and blender/decimate_check.py, which cap each part
+    rather than the total (Roblox's limit is per skinned MeshPart). E3b and E3
+    read them in preference to the totals (`tris_r15`, `tris_out`) and check
+    each part against the cap; a report without `parts` predates them.
   - `<out_dir>/eval.json`: this module's own prior output, re-read at the start
     of every run so `groundfit.gap_close` / `groundfit.gap_far`, the whole
     `groundfit.probe_close` / `groundfit.probe_far` results E13 and E14 read
@@ -278,7 +277,17 @@ def _row_E1(ctx):
 
 
 def _row_E3(ctx):
-    return _dig(ctx.m, "stages.mesh.report.tris_out")
+    """Triangles in the cooked mesh going into the rig, per part when mesh prep
+    reports its parts (`stages.mesh.report.parts`), since the cap is per
+    MeshPart; a report without parts predates them and carries one total."""
+    return _parts_tris(ctx, "stages.mesh.report") or _dig(ctx.m, "stages.mesh.report.tris_out")
+
+
+def _parts_tris(ctx, report):
+    parts = _dig(ctx.m, report + ".parts")
+    if isinstance(parts, dict) and parts:
+        return {name: p.get("tris") for name, p in parts.items() if isinstance(p, dict)}
+    return None
 
 
 def _row_E3b(ctx):
@@ -291,17 +300,11 @@ def _row_E3b(ctx):
     tris_r15 predates the measurement and reads FAIL(missing), which is the
     honest verdict for an unmeasured gate.
 
-    `stages.rig.report.tris_r15` is a single total today (the rig report
-    carries one skinned mesh); no producer currently writes a `parts`
-    breakdown. If a rig report ever DOES (a title with more than one skinned
-    MeshPart, whose combined triangles can exceed the cap while each part
-    stays under it), this row reads `stages.rig.report.parts` instead: `{part_name: {"tris":
-    int, ...}}`, and checks EACH part against the cap rather than their sum,
-    since Roblox enforces the cap per MeshPart."""
-    parts = _dig(ctx.m, "stages.rig.report.parts")
-    if isinstance(parts, dict) and parts:
-        return {name: p.get("tris") for name, p in parts.items() if isinstance(p, dict)}
-    return _dig(ctx.m, "stages.rig.report.tris_r15")
+    `stages.rig.report.parts` carries each skinned mesh part's triangles, and
+    this row checks EACH part against the cap rather than their sum, since
+    Roblox enforces the cap per MeshPart; a report with only `tris_r15`
+    predates the parts and is checked as one total."""
+    return _parts_tris(ctx, "stages.rig.report") or _dig(ctx.m, "stages.rig.report.tris_r15")
 
 
 def _row_E3b_check(v):
@@ -1078,7 +1081,8 @@ def build_rows(ctx):
         _truthy, "no touching limbs")
     add("E2", "plate", "approval", "human", False, "stages.plate.media_id",
         lambda c: _dig(c.m, "stages.plate.media_id"), _truthy, "one plate approved")
-    add("E3", "mesh", "triangle count", "auto", True, "stages.mesh.report.tris_out", _row_E3, _le(20000), "<= 20000")
+    add("E3", "mesh", "triangle count", "auto", True, "stages.mesh.report.tris_out (or .parts, per part)", _row_E3,
+        _row_E3b_check, "<= 20000 per part")
     add("E3b", "rig", "triangle count (post-rig)", "auto", True, "stages.rig.report.tris_r15 (or .parts, per part)",
         _row_E3b, _row_E3b_check, "<= 20000 per part (vendors re-mesh; measured on the exported, post-prep mesh)")
     add("E4", "mesh", "shells", "auto", False, "stages.mesh.report.shells", _row_E4, _eq(1), "== 1 (not gated)")

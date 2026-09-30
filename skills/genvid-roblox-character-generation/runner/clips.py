@@ -321,6 +321,39 @@ def recorded_g(m, clip):
     return g
 
 
+def _near_tie(stdout):
+    """poses.py's NEAR_TIE record, when it refused an unforced axis-map pick."""
+    lines = [l for l in stdout.splitlines() if l.startswith("NEAR_TIE ")]
+    return json.loads(lines[-1][len("NEAR_TIE "):]) if lines else None
+
+
+def near_tie_message(m, clip, tie):
+    """The refusal of an unforced axis-map pick that is a near-tie, as the
+    operator's ways out: the rig's Walk orientation when one is recorded, an
+    orientation by hand for a clip from another export, or the Walk first."""
+    head = ("clip transfer refused for %s: which way the rig faces is a near-tie on this clip (%s scores %.2f, "
+            "%s %.2f, %.2f apart, under %s), so the transfer will not guess."
+            % (clip, tie["g_pick"], tie["g_score"], tie["runner_up"], tie["runner_up_score"], tie["gap"],
+               tie["threshold"]))
+    walk_g = (((m["stages"].get("clips") or {}).get("items") or {}).get("Walk") or {}).get("g")
+    by_hand = ('pass its orientation by hand: `clips transfer --manifest ... --clip %s --g "<orientation>"`, '
+               "one of the 24 candidates poses.py lists (this clip's two closest were %s and %s)."
+               % (clip, tie["g_pick"], tie["runner_up"]))
+    if clip == "Walk":
+        return head + " The Walk is what every other clip takes its orientation from, so " + by_hand
+    if walk_g == "analytic":
+        return (head + " The rig's Walk was oriented from its toe bone (poses.py's analytic map), which is not "
+                "one of the candidates --g takes, so " + by_hand)
+    if walk_g:
+        return (head + ' Reuse the rig\'s Walk orientation, which the Walk was transferred with: %s. Pass it with '
+                "`clips transfer --manifest ... --clip %s --g-from Walk` (or `--g \"%s\"`). If this clip comes "
+                "from a different export than the Walk, its orientation can differ: %s"
+                % (walk_g, clip, walk_g, by_hand))
+    return (head + " No Walk has been transferred on this rig yet: transfer the Walk first "
+            "(`clips transfer --manifest ... --clip Walk`), then this clip with `--g-from Walk`. If this clip "
+            "comes from a different export than the Walk, " + by_hand)
+
+
 def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloads=None, blender=None,
              g=None, g_from=None, no_root=False, root_ref=None, trim=None, root_y=None, rig_mesh=None,
              translate=None, bind_from=None, root_xz=None):
@@ -463,6 +496,9 @@ def transfer(m, clip, candidate, *, rest="rest.json", archive_root=None, downloa
     # raised exception too, and a stale poses.json from an earlier run would
     # then read as a successful transfer.
     if r.returncode != 0 or not out_path.exists():
+        tie = _near_tie(r.stdout or "")
+        if tie:
+            raise RuntimeError(near_tie_message(m, clip, tie))
         raise RuntimeError("clip transfer failed for %s (rc=%s, wrote=%s): %s"
                            % (clip, r.returncode, out_path.exists(), r.stderr[-2000:]))
     poses = json.loads(out_path.read_text())
@@ -883,13 +919,31 @@ def contact(m, clip, *, rig_mesh=None, rest="rest.json", blender=None):
     return items[clip]["contact"]
 
 
-def speed_scale(m):
+# The most a measured animSpeedScale (walkSpeed / treadmill stride) may be; over
+# it the stride is taken as under-read, and the scale must be set by hand. An
+# upper limit only: a large character's walk legitimately plays well below
+# speed 1, and the known misread inflates the scale. Ruled 2026-09-29.
+SPEED_SCALE_MAX = 2.0
+
+
+def speed_scale(m, scale=None):
     """animSpeedScale = walkSpeed / strideStudsPerSec, from the in-engine
     treadmill measurement (`studio.py` ingests `treadmill.luau`'s
     `strideStudsPerSec` to `stages.clips.treadmill`) and `m["walk_speed"]` --
     the game-side Humanoid.WalkSpeed for this character type (the game's own
     concern, not a runner stage output; eval_cmd.py's E19 row already reads
-    this same top-level manifest convention -- see its `_row_E19` docstring)."""
+    this same top-level manifest convention -- see its `_row_E19` docstring).
+
+    A measured scale over SPEED_SCALE_MAX is refused as an under-read
+    stride. `scale` sets it by hand instead, with no treadmill needed;
+    `animSpeedScaleSource` records which ("treadmill" or "hand")."""
+    if scale is not None:
+        scale = float(scale)
+        if scale <= 0:
+            raise ValueError("a hand-set animSpeedScale must be positive, got %r" % scale)
+        manifest.set_stage(m, "clips", animSpeedScale=scale, animSpeedScaleSource="hand")
+        manifest.save(m)
+        return scale
     treadmill = m["stages"].get("clips", {}).get("treadmill")
     if not treadmill or not treadmill.get("strideStudsPerSec"):
         raise RuntimeError("no stages.clips.treadmill.strideStudsPerSec recorded; "
@@ -898,8 +952,14 @@ def speed_scale(m):
     if walk_speed is None:
         raise RuntimeError("no walk_speed on the manifest (m['walk_speed']); set the character's "
                            "intended Humanoid.WalkSpeed before computing animSpeedScale")
-    scale = float(walk_speed) / float(treadmill["strideStudsPerSec"])
-    manifest.set_stage(m, "clips", animSpeedScale=scale)
+    stride = float(treadmill["strideStudsPerSec"])
+    scale = float(walk_speed) / stride
+    if scale > SPEED_SCALE_MAX:
+        raise RuntimeError("animSpeedScale %.3f (walk_speed %s / stride %.3f studs/s) is over the plausible "
+                           "limit %s: the treadmill likely under-read the stride. Check the walk plays in Studio, "
+                           "then set the scale by hand: `clips speed-scale --manifest ... --scale <scale>`"
+                           % (scale, walk_speed, stride, SPEED_SCALE_MAX))
+    manifest.set_stage(m, "clips", animSpeedScale=scale, animSpeedScaleSource="treadmill")
     manifest.save(m)
     return scale
 
@@ -1338,7 +1398,7 @@ def _contact_cli(x):
 
 
 def _speed_scale_cli(x):
-    speed_scale(manifest.load(x.manifest))
+    speed_scale(manifest.load(x.manifest), scale=x.scale)
 
 
 def _no_item(x):
@@ -1486,6 +1546,8 @@ def register(sub):
     ct.set_defaults(func=_contact_cli)
 
     d = s.add_parser("speed-scale"); d.add_argument("--manifest", required=True)
+    d.add_argument("--scale", type=float, help="set animSpeedScale by hand (recorded as hand-set) instead of "
+                                               "deriving it from the treadmill's stride")
     d.set_defaults(func=_speed_scale_cli)
 
     em = s.add_parser("emit", help="write the text-to-motion request for the caller's own model")

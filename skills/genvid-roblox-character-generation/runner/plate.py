@@ -288,12 +288,15 @@ def select_front(m, media_id, asset_id=None, run=subprocess.run, opener=None):
     belongs to and never replaces a different recorded front. An adopted front's
     bytes are downloaded from Genvid and recorded as the front view path; running
     select-front again on an adopted front that has no path fetches it."""
+    # Matched as a string (the CLI's argument is one); stored as the id Genvid's rows
+    # carry: a bound candidate's own id, else an adopted id's number when it is one.
     media_id = str(media_id or "").strip()
     if not media_id:
         raise ValueError("--media-id must be a non-empty media id")
     st = _plate(m)
     ids = _media_ids(m)
     current = ids.get("front")
+    current = str(current) if current is not None else None
     candidates = sorted(k for k, v in ids.items() if CANDIDATE_RE.match(k) and str(v) == media_id)
     if candidates:
         if current and current != media_id and any(v in (st.get("generated") or {}) or ids.get(v) for v in VIEWS):
@@ -302,8 +305,8 @@ def select_front(m, media_id, asset_id=None, run=subprocess.run, opener=None):
         item = candidates[0]
         artifact = st["generated"][item]["artifact"]
         paths = dict(st.get("view_paths") or {}); paths["front"] = artifact
-        ids["front"] = media_id
-        entry = manifest.set_stage(m, "plate", media_ids=ids, media_id=media_id, artifact=artifact,
+        ids["front"] = ids[item]
+        entry = manifest.set_stage(m, "plate", media_ids=ids, media_id=ids[item], artifact=artifact,
                                    view_paths=paths, front_candidate=item)
         entry.pop("front_adopted", None)
         if current and current != media_id:
@@ -329,8 +332,9 @@ def select_front(m, media_id, asset_id=None, run=subprocess.run, opener=None):
         return m
     paths["front"] = _fetch_adopted_front(m, media_id, run, opener)
     m["asset_id"] = aid
-    ids["front"] = media_id
-    manifest.set_stage(m, "plate", media_ids=ids, media_id=media_id, front_adopted=True,
+    stored = int(media_id) if media_id.isascii() and media_id.isdecimal() else media_id
+    ids["front"] = stored
+    manifest.set_stage(m, "plate", media_ids=ids, media_id=stored, front_adopted=True,
                        view_paths=paths, artifact=paths["front"])
     manifest.note(m, "plate select-front: adopted existing media %s as the front plate; not re-imported; "
                      "its bytes fetched to %s" % (media_id, paths["front"]))

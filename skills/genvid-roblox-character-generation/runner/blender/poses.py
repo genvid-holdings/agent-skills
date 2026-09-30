@@ -226,6 +226,11 @@ def ry(deg):
 # 0.0 on every bone; the smallest mismatch witnessed that moves a limb (a
 # stance exported as the bind) reads 6.7.
 BIND_TOL_DEG = 5.0
+# An unforced axis-map pick whose runner-up scores within this of it is refused
+# as a near-tie. Measured on 17 real clips across two rigs, the right pick led by
+# 0.92 or more and the near-tie wrong picks by 0.78 or less; a wrong pick can
+# still lead by more, so only a walk's pick is to be trusted. Ruled 2026-09-29.
+NEAR_TIE_GAP = 0.85
 # A --bind-from rig's leg chain must be the clip's length within this fraction.
 BIND_LEG_TOL = 0.01
 
@@ -388,6 +393,24 @@ def paired_scale(a_heads, b_heads, rb):
     return root_head_span(a_heads, rb) or 0.0, root_head_span(b_heads, rb) or 0.0, "root_to_head"
 
 
+def import_fbx(path):
+    """Import an FBX and undo its importer's "connected" guess. FBX has no
+    connected flag; Blender's importer sets one on a child whose head lies on
+    its parent's tail, and a connected bone ignores its location keys, so a clip
+    would lose a bone's authored translation (a hip dip, a brow lift). Every
+    armature the import brings in is disconnected; rest heads are unchanged."""
+    before = set(bpy.data.objects)
+    bpy.ops.import_scene.fbx(filepath=path)
+    active = bpy.context.view_layer.objects.active
+    for ob in [o for o in bpy.data.objects if o not in before and o.type == "ARMATURE"]:
+        bpy.context.view_layer.objects.active = ob
+        bpy.ops.object.mode_set(mode="EDIT")
+        for eb in ob.data.edit_bones:
+            eb.use_connect = False
+        bpy.ops.object.mode_set(mode="OBJECT")
+    bpy.context.view_layer.objects.active = active
+
+
 def bind_armature(path, names, mode="names", prefix=""):
     """The bind of the armature in `path` (a rig fbx or glb): per bone in
     `names` (rest.json bone names) its world bind rotation and origin, read
@@ -405,7 +428,7 @@ def bind_armature(path, names, mode="names", prefix=""):
     if path.lower().endswith((".glb", ".gltf")):
         bpy.ops.import_scene.gltf(filepath=path)
     else:
-        bpy.ops.import_scene.fbx(filepath=path)
+        import_fbx(path)
     sc.render.fps, sc.render.fps_base, sc.frame_start, sc.frame_end, _cur = kept
     sc.frame_set(kept[4])
     rig = next((o for o in bpy.data.objects if o not in before and o.type == "ARMATURE"), None)
@@ -534,7 +557,7 @@ def main():
     if clip_path.lower().endswith((".glb", ".gltf")):
         bpy.ops.import_scene.gltf(filepath=clip_path)
     else:
-        bpy.ops.import_scene.fbx(filepath=clip_path)
+        import_fbx(clip_path)
     arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
 
     if action_name is not None:
@@ -901,6 +924,8 @@ def main():
         u = np.array([0.0, 0.0, 1.0])
         g = np.stack([np.cross(f, u), u, -f])  # rows: rig X/Y/Z <- clip right/up/back
         g_name = "analytic"
+        # the analytic map is computed, not ranked: no pick scores
+        g_pick = g_score = runner_up_score = None
         # PER-BONE REST CORRECTION F: delta transfer preserves deviation-from-
         # rest, so a rest mismatch (X Bot T-pose vs our A-pose) bakes a
         # constant error into every frame — deformed limbs + feet tucked off
@@ -939,11 +964,26 @@ def main():
         F = ID_F
         print(f"empirical pick g = {best} (score {bestScore:0.2f}, runner-up {scored[1][0]:0.2f})")
         g_name = best
+        # the ranking's own pick and margin, recorded even when --g forces another
+        g_pick, g_score, runner_up_score = best, round(float(bestScore), 4), round(float(scored[1][0]), 4)
         if forced_g is not None:
             assert forced_g in CANDS, f"--g={forced_g} is not one of the 24 candidates"
             g = CANDS[forced_g]
             g_name = forced_g
             print(f"FORCED g = {forced_g} (empirical would have been {best})")
+        elif runner_up_score - g_score < NEAR_TIE_GAP:
+            gap = round(runner_up_score - g_score, 4)
+            # one machine-readable line for the runner, which names the rig's Walk orientation
+            print("NEAR_TIE " + json.dumps({"g_pick": best, "g_score": g_score, "runner_up": scored[1][1],
+                                            "runner_up_score": runner_up_score, "gap": gap,
+                                            "threshold": NEAR_TIE_GAP}))
+            raise ValueError(
+                f"the axis-map pick is a near-tie: {best} scores {g_score:0.2f} and {scored[1][1]} "
+                f"{runner_up_score:0.2f}, {gap:0.2f} apart (under {NEAR_TIE_GAP}), so this clip cannot tell "
+                f"which way the rig faces. Reuse the rig's Walk orientation: pass --g=<the g the Walk's poses doc "
+                f"records>. If this clip comes from a different export than the Walk, pass its orientation by "
+                f"hand with --g=<one of the candidates above>. If no Walk has been transferred on this rig yet, "
+                f"transfer the Walk first.")
 
     # JSON for the KeyframeSequence writer (kfs.py) + the world-space trajectories
     # impact.py scores for attackImpactDelaySecs and metrics.py for foot_lift /
@@ -1029,6 +1069,7 @@ def main():
     doc = {"hier": jhier, "frames": jframes, "traj": traj,
            "clip_seconds": frames[-1][0], "source": os.path.basename(clip_path),
            "root_motion": bool(emit_root), "root_ref": root_ref, "g": g_name, "g_forced": forced_g is not None,
+           "g_pick": g_pick, "g_score": g_score, "runner_up_score": runner_up_score,
            "g_scored_on": g_bone,
            "root_range_studs": [round(float(v), 3) for v in root_range],
            "k": round(float(k), 5), "k_source": k_source,
