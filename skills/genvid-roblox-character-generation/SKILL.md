@@ -978,7 +978,8 @@ in the game:
    axis-map pick sends up to down. On the empirical axis-map branch (every
    clip but a native Mixamo or Rigify one) `clips transfer` refuses a clip
    whose bind sits more than 5 degrees off the rig's rest, naming each bone
-   and its angle. Pass `--bind-from <the fbx or glb of the skeleton the clip
+   and its angle. Two joints at one point have no direction between them and
+   are not compared. Pass `--bind-from <the fbx or glb of the skeleton the clip
    was authored on, in its rest>` (the rig's own file for a clip authored on
    the rig; bones matched by name, after the `rename` convention when the
    clip takes it): the transfer then measures from that file's bind. The file
