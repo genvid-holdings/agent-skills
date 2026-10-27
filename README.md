@@ -6,7 +6,7 @@ This is the Genvid reference skill pack: a runtime-agnostic [Agent Skills](https
 
 The pack carries no tenant data. Each skill describes how to call the Genvid boundary: orienting the agent, connecting to generators, generating with provenance, gating destructive operations, propagating changes, and driving the production workflow from screenplay through storyboard. The pack version is matched to the boundary via `boundary_compat` in `pack.json`; see Compatibility below.
 
-Two skills are the exception. **`genvid-article50-readiness`** drives no boundary tool at all and runs entirely offline: start there if you have never heard of Genvid. **`genvid-roblox-studio-ops`** drives Roblox Studio directly over its own built-in MCP server, not the Genvid boundary.
+Three skills are the exception. **`genvid-article50-readiness`** drives no boundary tool at all and runs entirely offline: start there if you have never heard of Genvid. **`genvid-roblox-studio-ops`** drives Roblox Studio directly over its own built-in MCP server, not the Genvid boundary. **`genvid-agent-team-governance`** is a working method, not a tool surface: how a team of coding agents and their humans keeps a shared repository governed, from recorded rulings and independent review to a merge route bound to the exact commit the owner approved.
 
 **`genvid-roblox-character-generation`** also ships a runnable zero-touch runner (`runner/cli.py`, entry point under that skill's own directory) that drives its plate-to-parked-template chain end to end; see that skill's SKILL.md §7.
 
