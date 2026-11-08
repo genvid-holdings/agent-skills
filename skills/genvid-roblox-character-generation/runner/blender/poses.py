@@ -235,20 +235,35 @@ NEAR_TIE_GAP = 0.85
 BIND_LEG_TOL = 0.01
 
 
+# An offset shorter than this fraction of its own skeleton's longest offset
+# has no direction to compare. Two joints at one point never read exactly
+# zero: single-precision positions leave an offset of about a millionth of
+# the skeleton's size, pointing anywhere, and normalised it reads as a bone
+# turned by tens of degrees. Proposal: 1e-3 is a thousand times that noise, so
+# what is kept has a direction good to a small fraction of a degree, and it is
+# far shorter than any real bone. A fraction, because the two skeletons may be
+# in different units.
+SEGMENT_FLOOR = 1e-3
+
+
 def segments(to, frm, rb, order):
     """Each bone's direction (its origin to a child's) in two skeletons, as
     (parent, direction in `to`, direction in `frm`), for the bones both carry.
-    A zero-length offset is left out."""
-    segs = []
+    An offset under `SEGMENT_FLOOR` of the longest one in its own skeleton,
+    in either skeleton, is left out: a zero-length joint has no direction."""
+    found = []
     for n in order:
         pr = rb[n]["parent"]
         if n not in to or pr not in to or n not in frm or pr not in frm:
             continue
         a, b = np.asarray(to[n]) - np.asarray(to[pr]), np.asarray(frm[n]) - np.asarray(frm[pr])
-        la, lb = float(np.linalg.norm(a)), float(np.linalg.norm(b))
-        if la >= 1e-6 and lb >= 1e-9:
-            segs.append((pr, a / la, b / lb))
-    return segs
+        found.append((pr, a, float(np.linalg.norm(a)), b, float(np.linalg.norm(b))))
+    if not found:
+        return []
+    floor_a = SEGMENT_FLOOR * max(la for _pr, _a, la, _b, _lb in found)
+    floor_b = SEGMENT_FLOOR * max(lb for _pr, _a, _la, _b, lb in found)
+    return [(pr, a / la, b / lb) for pr, a, la, b, lb in found
+            if la > 0 and lb > 0 and la >= floor_a and lb >= floor_b]
 
 
 def angle_deg(a, b):
