@@ -428,8 +428,11 @@ moment of the call. The finalize step's shape, exactly as shipped
 - `storage_class = "platform"`, `locator_type = "platform_asset"` — the
   `locator` is the platform's own URI, e.g.
   `rbxassetid://123456789012345` (synthetic example).
-- Durable identifiers are roblox.com-scoped, using all four prefixes:
-  `asset_id:`, `mesh_id:`, `texture_id:`, `generation_uuid:`.
+- Durable identifiers are roblox.com-scoped (`asset_id:`, `mesh_id:`,
+  `texture_id:`, `generation_uuid:` and the surface-map ids), plus one
+  github.com-scoped `source:<owner>/<repo>@<commit-sha>:<path>` naming the
+  committed file a published artifact was built from. `discovery_read`'s
+  identifier-scopes read lists the live set.
 - `generation` is passed as a **RAW JSON OBJECT** (`finalize_media_registration.py:152-154`)
   — **not** a string. This is the opposite encoding from the corrections
   payload in §5.2 below; see the asymmetry callout there.
@@ -1101,11 +1104,11 @@ false negative.
 
 **Binding a published clip.**
 `register_media` at `storage_class="platform"` with `kind="animation-clip"`,
-`link_type="cast_member_model"`, a `.glb` filename and
-`mime_type="model/gltf-binary"` as the media-type hint (a `.rbxmx` name is
-rejected; no proxy), then `finalize_media_registration` with
+`link_type="cast_member_model"`, the clip's own `.rbxmx` filename and
+`mime_type="application/xml"` (no proxy), then `finalize_media_registration` with
 `locator="rbxassetid://<id>"`, `locator_type="platform_asset"`, the
-`roblox.com` `asset_id:` identifier, `size_bytes` measured from the poses
+`roblox.com` `asset_id:` identifier plus the `github.com` `source:` identifier
+of the committed `.rbxmx`, `size_bytes` measured from the poses
 file (stated in `generation.params`), `duration_seconds` = the scaled
 length, and NO `target`/`stage` (the keyframesequence stage is refused).
 `clips bind` writes exactly this, registering each clip under the title
@@ -1239,12 +1242,18 @@ outright. So `clips.bind()` writes
 `finalize_media_registration` (`locator="rbxassetid://<id>"`,
 `locator_type="platform_asset"`) payloads for the orchestrator to run for
 real, and `clips registered --clip <name> --media-id <id>` records the
-finalized Genvid id once it does. The payloads carry two boundary facts:
-`register_media` refuses a `.rbxmx` filename ("Cannot determine media
-type"), so the name is `<title>.glb` with `mime_type="model/gltf-binary"`, a
-media-type hint only (no file of that name exists; the original is the
-platform id); and `target="roblox"` / `stage="roblox/keyframesequence"` is not
-a known destination and stage, so a clip finalizes with no target/stage.
+finalized Genvid id once it does. The payloads name the clip by its true
+`<title>.rbxmx` filename with `mime_type="application/xml"`. The `.rbxmx`
+source stays in the game's git repository, and the finalize records where:
+a `github.com` `source:<owner>/<repo>@<commit-sha>:<path>` identifier beside
+the `roblox.com` `asset_id:`. `bind()` reads it from the checkout holding the
+built file and refuses a clip whose `.rbxmx` is uncommitted, edited since
+its last commit, or committed but on no `origin` branch as of the last fetch:
+the identifier must name a commit GitHub holds with the bytes that were
+published. Commit and push first. A clip outside any checkout, or in one whose origin is
+not GitHub, binds with the Roblox id only and a manifest note says so. And
+`target="roblox"` / `stage="roblox/keyframesequence"` is not a known
+destination and stage, so a clip finalizes with no target/stage.
 Supersession is carried in the generation params (`supersedes_media_id`) and
 in `input_media_ids`, never by deleting the earlier row. A clip's params also
 carry its transfer options (`root_y`, `root_ref`, `g`, `g_from`, `trim`,
