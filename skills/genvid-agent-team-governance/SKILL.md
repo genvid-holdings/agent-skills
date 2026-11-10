@@ -94,7 +94,7 @@ Every finding is a row in a ledger outside the PR, with **closed vocabularies**.
 
 **Rule.** For a full-tier PR, the author mutates only the lines the branch added or changed, one small change at a time, in a scratch copy, and runs the owning lane's tests. A mutant the tests still pass is a **survivor**: that line is held by no test. The output block goes in the PR body.
 
-- **The cap follows the PR's risk, not the author's choice.** The tool picks it from the changed paths and the mutant count, and prints the cap and why. For example: every mutant when the branch touches the review, merge or hook tooling, or yields more than 120 mutants; a sampled cap of 30 elsewhere. The stricter rule wins when two fit. A capped run is labelled a sample. Overriding the cap requires the owner's word named in the PR body.
+- **The cap follows the PR's risk, not the author's choice.** The tool picks it from the changed paths and the mutant count, and prints the cap and why. For example: every mutant when the branch touches the review, merge or hook tooling, or yields more than a configured number of mutants; a smaller sampled cap elsewhere. The stricter rule wins when two fit. A capped run is labelled a sample. Overriding the cap requires the owner's word named in the PR body.
 - **No bare "equivalent".** A survivor claimed equivalent to the original needs a killing test or a written proof that no input tells them apart.
 - **Integrity.** The run refuses to report against a failing baseline (every mutant would read as killed), discards a mutant that does not parse, and starts every run from the same prepared tree so leftovers from one run cannot kill the next. Limit concurrent runs per machine (four is a reasonable default) and queue the rest.
 - A CI helper flags a full-tier PR whose body lacks the block. It only flags (a red check would stay red after a body edit).
@@ -123,7 +123,7 @@ Every finding is a row in a ledger outside the PR, with **closed vocabularies**.
 - **Signals are graded.** *Deterministic:* an explicit `supersedes: [<numbers>]` field in a work record, the same subject, the same `Closes #N`, the same registry key, or a **retired ruling** (the older item cites a ruling now merged or retired, and the newer one cites its replacement). *Weak:* one author, one lane and a branch name differing only by a `-2` or `-v2` suffix; a model's suggestion. *Candidate only:* file overlap, which a model pass reads but which is never proposed on its own. Each pair is kept once, under its strongest signal.
 - **Model-suggested pairs are verified:** each must carry a verbatim quote from one of the pair that the tool finds in it. A suggestion that fails is printed as dropped.
 - **At PR open,** a hook warns when the new PR's files overlap an open PR's by half or more.
-- **Autonomy is earned.** Pairs go to the decision list. Automatic closing for an author is enabled only after a configured streak of consecutive owner rulings of "close" with no edit (twenty, in the project this came from), and the tool reports the current streak.
+- **Autonomy is earned.** Pairs go to the decision list. Automatic closing for an author is enabled only after a configured streak of consecutive owner rulings of "close" with no edit, and the tool reports the current streak.
 
 **Prevents:** duplicate work merged twice, and an agent closing someone else's PR on a guess.
 
@@ -142,7 +142,7 @@ Every finding is a row in a ledger outside the PR, with **closed vocabularies**.
 
 ### One merge workstation: the lease
 
-Only one workstation may hold the merge role at a time, across machines. The lease lives on the shared remote as a branch whose one file gains one record per change (`{seq, kind, holder, host, pid, at, expires_at}`, kind `take`, `renew`, `release` or `takeover`).
+Only one workstation may hold the merge role at a time, across machines. The lease lives on the shared remote as a branch whose one file gains one record per change (a take, renewal, release or takeover), each naming the holder and when its hold expires.
 
 - **The push is the compare-and-swap.** Every change is a new commit on the tip just read, pushed without force. Two holders that read one tip push siblings, and the server refuses the second.
 - The holder renews on a heartbeat, and the merge tool renews before each merge and each push; a refused renewal stops the run at once.

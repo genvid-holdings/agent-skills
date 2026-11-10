@@ -1153,6 +1153,17 @@ def _bind_title(m, clip, item, version, name):
     return built
 
 
+def _git_source(item):
+    """`(identifier, None)` naming the commit `item`'s built `.rbxmx` sits at, or
+    `(None, reason)` when it has none the boundary can record -- see
+    `genvid_bind.git_source_identifier`, which also refuses an uncommitted or
+    edited file. A clip with no `clips build` record (published by hand) has no
+    file to read."""
+    if not item.get("rbxmx"):
+        return None, "no `clips build` record names its .rbxmx"
+    return genvid_bind.git_source_identifier(item["rbxmx"])
+
+
 def _superseded_media_id(m, clip):
     """The Genvid media id of the newest item on `stages.clips.superseded[clip]`
     that was registered, or None: the row a bind of the re-transferred clip
@@ -1188,15 +1199,17 @@ def bind(m, ids, version=None, name=None):
     - `register_media`: `storage_class="platform"`, `kind="animation-clip"`
       (the genvid-media-registration vocabulary for a rig animation, distinct
       from `"mesh"`), `link_type=genvid_bind.MODEL_LINK`
-      (`cast_member_model` -- the pack rule is prefix = asset type), a `.glb`
-      filename with `mime_type="model/gltf-binary"` (the media-type HINT the
-      boundary accepts for a model row; there is no such file -- an `.rbxmx`
-      name is rejected outright, so the payload must carry a `.glb` name;
-      shape witnessed 2026-09-10). No
-      `proxy_filename`: the platform tier permits no proxy.
+      (`cast_member_model` -- the pack rule is prefix = asset type), the
+      clip's true `<title>.rbxmx` filename with `mime_type="application/xml"`.
+      No `proxy_filename`: the platform tier permits no proxy.
     - `finalize_media_registration`: `locator="rbxassetid://<id>"`,
       `locator_type="platform_asset"`, `identifiers=[{"identifier_scope":
-      "roblox.com", "identifier_value": "asset_id:<id>"}]` (the schema's
+      "roblox.com", "identifier_value": "asset_id:<id>"}]` plus, for a built
+      clip whose `.rbxmx` is committed in a GitHub checkout, the
+      `{"identifier_scope": "github.com", "identifier_value":
+      "source:<owner>/<repo>@<commit-sha>:<path>"}` naming that commit
+      (`genvid_bind.git_source_identifier`; an uncommitted or edited `.rbxmx`
+      is refused before any payload) (the schema's
       `IdentifierInput` shape, not a bare string list -- `<id>` here is the
       PUBLISHED ROBLOX asset id, never the Genvid anchor id `m["asset_id"]`,
       which is artifact-scoped and, being the same value for every clip,
@@ -1239,20 +1252,20 @@ def bind(m, ids, version=None, name=None):
     titles = {clip: _bind_title(m, clip, items[clip], version, name) for clip in ids}
     # Every clip's source row is resolved before any governed write.
     sources = {clip: _source_citation(m, clip, items[clip]) for clip in ids}
+    # ...and so is the git source of every built clip's KeyframeSequence: an
+    # uncommitted or edited .rbxmx is refused here, before any payload.
+    git_sources = {clip: _git_source(items[clip]) for clip in ids}
     genvid_bind.ensure_claim(m, m["asset_id"], "clips")
     roblox_ids = dict(m["stages"].get("clips", {}).get("roblox_ids") or {})
     for clip, roblox_id in ids.items():
         item = items[clip]
         title = titles[clip]
-        # A `.rbxmx` filename is rejected at register_media (422 "Cannot determine
-        # media type from filename", 2026-09-04) and so was every bind from
-        # 2026-09-04 to 09-09, which the orchestrator re-shaped by hand. The shape
-        # that lands (witnessed 2026-09-10 on two bound clips): a geometry
-        # extension so the row types as a model, with `kind="animation-clip"`
-        # saying what it is. The extension is a media-type hint only -- no file of
-        # that name exists; the original is the platform id.
-        filename = "%s.glb" % title
-        mime_type = "model/gltf-binary"
+        # The clip's true format: register_media types a `.rbxmx` filename as a
+        # model (live 2026-11-10; before that it refused one and binds carried a `.glb`
+        # name as a media-type hint), with `kind="animation-clip"` saying what it
+        # is. There is no IANA type for a Roblox XML model; it is XML.
+        filename = "%s.rbxmx" % title
+        mime_type = "application/xml"
         # size_bytes is a required finalize field; the published KeyframeSequence
         # has no file, so the size WITNESSED here is the transfer output the
         # sequence was built from, and params says so.
@@ -1282,6 +1295,12 @@ def bind(m, ids, version=None, name=None):
         if superseded_id:
             generation["params"]["supersedes_media_id"] = superseded_id
         identifiers = [{"identifier_scope": "roblox.com", "identifier_value": "asset_id:%s" % roblox_id}]
+        git_source, no_source_reason = git_sources[clip]
+        if git_source:
+            identifiers.append(git_source)
+        else:
+            manifest.note(m, "clips bind: %s carries no git source (%s); its row names only the Roblox id"
+                             % (clip, no_source_reason))
         finalize_path = genvid_bind.mcp_payload("finalize_media_registration", m["out_dir"],
             project_id=m["project_id"], media_id=_pending_media_id(register_path),
             link_type=genvid_bind.MODEL_LINK, asset_id=m["asset_id"], filename=filename,

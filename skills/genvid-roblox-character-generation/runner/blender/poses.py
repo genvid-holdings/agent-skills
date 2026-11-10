@@ -239,10 +239,10 @@ BIND_LEG_TOL = 0.01
 # has no direction to compare. Two joints at one point never read exactly
 # zero: single-precision positions leave an offset of about a millionth of
 # the skeleton's size, pointing anywhere, and normalised it reads as a bone
-# turned by tens of degrees. Proposal: 1e-3 is a thousand times that noise, so
-# what is kept has a direction good to a small fraction of a degree, and it is
-# far shorter than any real bone. A fraction, because the two skeletons may be
-# in different units.
+# turned by tens of degrees. 1e-3 (ruled 2026-11-08) is a thousand times that
+# noise, so what is kept has a direction good to a small fraction of a degree,
+# and it is far shorter than any real bone. A fraction, because the two
+# skeletons may be in different units.
 SEGMENT_FLOOR = 1e-3
 
 

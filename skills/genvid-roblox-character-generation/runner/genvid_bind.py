@@ -9,7 +9,7 @@ result hosts it has vetted for the attested provider, so an ingest that holds
 the bytes too passes `fallback_path` and is re-sent multipart when the boundary
 refuses the URL.
 """
-import json, subprocess, uuid
+import json, re, subprocess, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 import manifest, cost
@@ -422,6 +422,57 @@ def mcp_payload(tool, out_dir, **args):
     p = d / ("%s-%d.json" % (tool, n))
     p.write_text(json.dumps({"tool": tool, "args": args}, indent=2))
     return p
+
+
+GIT_SOURCE_SCOPE = "github.com"   # the one source host the boundary's identifier vocabulary governs
+_GITHUB_REMOTE = re.compile(r"^(?:git@github\.com:|ssh://git@github\.com/|https://github\.com/)"
+                            r"(?P<repo>[^/]+/[^/]+?)(?:\.git)?/?$", re.IGNORECASE)
+
+
+def _git(repo_dir, *args, run=subprocess.run):
+    # literal pathspecs: a file named with * or [ names that one file, not a glob
+    return run(["git", "--literal-pathspecs", "-C", str(repo_dir), *args], capture_output=True, text=True)
+
+
+def git_source_identifier(path, run=subprocess.run):
+    """The `github.com source:<owner>/<repo>@<commit-sha>:<path>` identifier naming
+    the committed file a platform-published artifact was built from, as
+    `(identifier, None)` -- or `(None, reason)` when the file has no source the
+    vocabulary can name: it sits in no git checkout, or the checkout's origin is
+    not GitHub.
+
+    A file that IS in a checkout but is untracked, or has changes since its last
+    commit, is refused (ValueError): HEAD would not hold the bytes that were
+    published, so the identifier would name the wrong source. So is a commit no
+    origin branch contains (as of the last fetch): it was never pushed, and the
+    identifier would name a commit GitHub does not have. A recorded file
+    that no longer exists is refused too (FileNotFoundError) -- the source is
+    measured, never assumed."""
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError("source file %s is not on disk; the git source must be read from it, not assumed"
+                                % path)
+    top = _git(path.parent, "rev-parse", "--show-toplevel", run=run)
+    if top.returncode != 0:
+        return None, "%s is in no git checkout" % path.name
+    root = Path(top.stdout.strip())
+    origin = _git(root, "remote", "get-url", "origin", run=run)
+    match = _GITHUB_REMOTE.match(origin.stdout.strip()) if origin.returncode == 0 else None
+    if not match:
+        return None, "the checkout holding %s has no GitHub origin" % path.name
+    rel = path.resolve().relative_to(root.resolve()).as_posix()
+    if _git(root, "ls-files", "--error-unmatch", "--", rel, run=run).returncode != 0:
+        raise ValueError("%s is not committed in %s; commit it first, so the source a published id names "
+                         "is the one in the repository" % (rel, match.group("repo")))
+    if _git(root, "status", "--porcelain", "--", rel, run=run).stdout.strip():
+        raise ValueError("%s has changes since its last commit in %s; commit them first, so the source a "
+                         "published id names is the one that was published" % (rel, match.group("repo")))
+    sha = _git(root, "rev-parse", "HEAD", run=run).stdout.strip()
+    if not _git(root, "for-each-ref", "--contains", sha, "refs/remotes/origin", run=run).stdout.strip():
+        raise ValueError("commit %s holding %s is on no origin branch of %s; push it first, so the source a "
+                         "published id names can be fetched from GitHub" % (sha[:12], rel, match.group("repo")))
+    return {"identifier_scope": GIT_SOURCE_SCOPE,
+            "identifier_value": "source:%s@%s:%s" % (match.group("repo"), sha, rel)}, None
 
 
 def require_assignee(m):
