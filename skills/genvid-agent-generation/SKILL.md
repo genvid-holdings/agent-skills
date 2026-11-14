@@ -24,6 +24,7 @@ Claim the task that matches what you are generating:
 |---|---|---|
 | asset image (cast / location / prop / style / ...) | `asset` | `assetImage` |
 | music cue | `asset` | `assetAudio` |
+| location music, or an asset's sound effect (`location_music`, `<type>_sfx`) | `asset` | `assetImage` |
 | asset **3D model** (a generated mesh bound to an asset) | `asset` | `assetImage` |
 | shot first frame, last frame, or keyframe | `shot` | `keyframe` |
 | shot video | `shot` | `video` |
@@ -185,12 +186,46 @@ carry the images across — it fails loudly, which is the intended behaviour.
 Retyping away from `location` is refused outright for an unrelated reason
 (`CONFLICT_LOCATION_IMMUTABLE`).
 
-### The waveform thumbnail (music only, for now)
+### Music and sound effects on any asset
+
+Music and sound effects are not limited to the music asset. Eleven more asset
+audio slots exist, and each holds media type `audio`:
+
+- `location_music` — music that belongs to a location, for example a game's
+  level music.
+- `<type>_sfx` — a sound effect that belongs to an asset, for `cast_member`,
+  `prop`, `costume`, `extra`, `set_dressing`, `makeup_hair`, `vehicle`,
+  `livestock`, `greenery` and `inspiration` (so `prop_sfx`, `vehicle_sfx`, and
+  so on).
+
+The render type must match the slot: `T2M` only on a music slot (`music_audio`,
+`location_music`), `T2A` only on a sound-effect slot. Two pairings are refused
+before a row is written: `T2M` on a sound-effect slot and `T2A` on a music slot.
+Upload and registration are accepted on any audio slot. Bind with the asset's id, as for any asset
+audio: `ingest_generated_media(project_id=..., link_type="prop_sfx",
+asset_id=..., render_type="T2A", ...)`.
+
+What differs from the music asset:
+
+- **The task lane is the asset's own.** Only the music asset has an
+  `assetAudio` lane. For `location_music` and every `<type>_sfx` slot, claim the
+  asset's normal task (`assetImage`, as for any asset anchor) before you bind.
+  An asset whose task is approved refuses audio changes until it is reopened,
+  the same as it does for images.
+- **Audio never demotes other approvals.** Selecting an audio take does not demote
+  shot approvals and does not flag the asset's art approval.
+- **A slot can hold several selected sounds, and Genvid has no per-take label.**
+  If you select more than one sound on an asset, record which media id is which
+  on your side. `assets_read(method="get")` returns each media row with its
+  `link_type`, which tells you the slot, not which sound it is.
+- **A waveform may accompany any of them** via `thumbnail_base64`, below.
+
+### The waveform thumbnail (asset audio only, for now)
 
 Genvid has no audio thumbnailer, so a music cue shows no visual
 representation unless you supply one. `ingest_generated_media` takes an
 optional `thumbnail_base64` param — a waveform PNG, base64-encoded — accepted
-**only** on a `music_audio` bind; passed on any other lane, the bind is
+**only** on an asset audio slot (`music_audio`, `location_music`, `<type>_sfx`); passed on any other lane, the bind is
 rejected outright. Image and video already derive their own thumbnail and
 must not gain a second, caller-controlled source; the shot-scoped audio lanes
 (`shot_dialog` / `shot_sfx`) are a different case — nothing renders
